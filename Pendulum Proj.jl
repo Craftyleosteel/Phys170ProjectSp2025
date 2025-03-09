@@ -12,162 +12,90 @@ begin
 	using Base.Iterators: partition
 	using ProgressLogging
 	using Plots
+	using GLMakie
 end
-
-# ╔═╡ da94368f-5ef2-41e0-82b2-793f607fc85d
-begin
-using GLMakie
-using ProgressMeter
-
-function animate_pendulum(states)
-    # Check if states are empty
-    if isempty(states)
-        println("Error: States vector is empty!")
-        return
-    end
-
-    # Create figure and axis
-    fig = Figure()
-    ax = Axis(fig[1, 1], title="Pendulum Animation", limits=(-1.2, 1.2, -1.2, 1.2),
-              xlabel="X Position", ylabel="Y Position")  # Flipping axes with labels
-
-    # Initialize the progress bar
-    p = Progress(length(states), desc="Animating Pendulum")
-
-    # Animation loop
-    for frame in 1:length(states)
-        # Update the progress bar
-        next!(p)
-
-        # Time the frame processing
-        @elapsed begin
-            #println("Processing frame $frame of $(length(states))")
-            angle = states[frame]  # Get the angle at the current frame
-
-            # Create new line and scatter plot elements
-            GLMakie.lines!(ax, [0, sin(angle)], [0, cos(angle)], linewidth=3)  # Swap cos and sin to flip axes
-            GLMakie.scatter!(ax, [sin(angle)], [cos(angle)], markersize=10, color=:red)  # Swap cos and sin to flip axes
-
-            # Display the figure to update the plot
-            display(fig)
-
-        end
-
-        # Optional: Add a small delay to help with animation pacing
-        sleep(0.01)  # Add a delay to ensure smooth rendering (adjust as needed)
-    end
-
-    println("Animation complete!")
-end
-end
-
-# ╔═╡ 8c5886c6-4cf0-4d85-9152-61dcce2048e1
-md"""
-!!! info "Due date: January 26, 2025"
-
-	**Topic**: *Neural Networks*
-"""
-
-# ╔═╡ b7b33d1e-6c41-4173-af0f-e75b82ea1bf7
-#Code iterated on with the help of Chat GPT and stack exchange for debugging.
 
 # ╔═╡ be103db6-d2ce-11ef-0622-590223ed3118
 md"""
-# Homework 4
+# 3-D Dimensional Pendulum Balancing Act
 """
 
-# ╔═╡ 1fa5e0e7-fb61-4b1c-a1ee-a6b71864f899
+# ╔═╡ 8f01207b-3a38-4c8b-8ecc-dbebd5185b1f
 md"""
-!!! exercise "Reinforcement training with physics"
-	
-	This homework has one problem which is like a mini-project, equivalent to roughly two problems from previous homework assignments. The goal is to train a machine learning model that can keep a 2D pendulum upright, in its naturally unstable position, as long as possible. To do this, the machine is able to apply a torque to the pendulum in response to its position to prevent it from falling down.
-
-	To start things off, here are the packages you are allowed to use:
+## Imports
 """
 
-# ╔═╡ c628be92-228d-4d19-a5f4-662c889adda5
+# ╔═╡ 0ac324ae-2532-4d6a-89d2-5cd9207635e5
 md"""
-!!! exercise "The environment"
-	
-	As we discussed, reinforcement learning involves a state of a system in a given environment, actions that influence the evolution of the state, and a reward system that associates a number of reward points for each action in a given state. The goal is to maximize the reward. The reward can be packaged into a quality function $Q(s,a)$ which assess the quality of an action $a$ in a given state $s$. Building up this quality function is done through training the machine model. 
-
-	In this problem, we want to construct such a function $Q(s,a)$ by training a neural network. The input to the neural network will be an array $s$ that represents the state of the pendulum, and the output will be an array whose components are $Q(s,a)=[Q(s,1), Q(s,2),\ldots , Q(s,n)]$ where $a$ is one of $n$  possible actions. 
-
-	To start you off, we will describe a snapshot of the system using a Julia `struct` as follows:
+## Defining Pendulum Object
 """
 
 # ╔═╡ 547da9b9-df02-4ef1-a021-81d59ca00f30
 begin
-	mutable struct InvertedPendulum
-	    θ::Float64
-	    θ_dot::Float64
-	    g::Float64
-	    l::Float64
-	end
-	
-	function InvertedPendulum(;θ=0.0, θ_dot=0.0, g=9.8, l=1.0)
-		InvertedPendulum(θ, θ_dot, g, l)
-	end
+mutable struct InvertedPendulum3D
+    θ_x::Float64     # Angle from upright position along x-axis
+    θ_y::Float64     # Angle from upright position along y-axis
+    θ_dot_x::Float64 # Angular velocity in x-direction
+    θ_dot_y::Float64 # Angular velocity in y-direction
+    g::Float64       # Gravitational acceleration (9.8 m/s²)
+    l::Float64       # Length of the pendulum (1.0 meters)
 end
 
-# ╔═╡ 5933e431-849c-4725-a055-7c35da035a4f
-md"""
-!!! exercise ""
-	Here, `θ` and `θ_dot` keep track of the angle and angular velocity of the pendulum, $g$ is the gravitational acceleration, and $l$ is the length of the pendulum. We will adopt the convention that $\theta=0$ is the unstable upright configuration.
+function InvertedPendulum3D(;θ_x=0.0, θ_y=0.0, θ_dot_x=0.0, θ_dot_y=0.0, g=9.8, l=1.0)
+    InvertedPendulum3D(θ_x, θ_y, θ_dot_x, θ_dot_y, g, l)
+end
+end
 
-	We also are defining a struct initialization function, with default values, that sets up an environment. 
-"""
-
-# ╔═╡ e705f111-784d-4335-9481-1850a46b3171
+# ╔═╡ aef17d2d-01a3-4d24-8666-603a1719c259
 md"""
-!!! exercise ""
-	1. Write a function that resets the environment so that the pendulum is upright, plus or minus a small random angle, with no initial angular velocity. 
+## Resets the pendulum object
 """
 
 # ╔═╡ 8e4cb8c0-6040-426f-ae4d-e9db1700bd19
-function reset!(e::InvertedPendulum)
-
-	# YOUR CODE HERE
-	e.θ = rand(-0.1:0.01:0.1)  # Small random deviation from upright
-    e.θ_dot = 0.0  # No initial angular velocity
-	
+function reset!(e::InvertedPendulum3D)
+    e.θ_x = rand(-0.1:0.01:0.1)  # Small random deviation from upright in x-axis
+    e.θ_y = rand(-0.1:0.01:0.1)  # Small random deviation from upright in y-axis
+    e.θ_dot_x = 0.0  # No initial angular velocity in x
+    e.θ_dot_y = 0.0  # No initial angular velocity in y
 end
 
-# ╔═╡ e50e39a5-a702-40c3-9766-1a4b719d562d
+# ╔═╡ 5506ca50-33b2-4e3c-8322-f27b26d467ab
 md"""
-!!! exercise ""
-	2. Write a function that reads off the state of the pendulum from the environment. The state needs to be an array of type Float32 as it will be an input into a neural network.
+## Reads out the state of the object
 """
 
 # ╔═╡ 18b0e099-fbb4-4966-9529-e4d8f63a503b
-function get_state(e::InvertedPendulum)
-
-	# YOUR CODE HERE
-	return Float32[e.θ, e.θ_dot, cos(e.θ)]  # Cosine term helps with periodicity
-	
+function get_state(e::InvertedPendulum3D)
+    return Float32[e.θ_x, e.θ_y, e.θ_dot_x, e.θ_dot_y, cos(e.θ_x), cos(e.θ_y)]  # Cosine terms help with periodicity
 end
 
-# ╔═╡ 834bdd6f-4e07-4170-8b56-3d6120f52996
+
+# ╔═╡ 55f1f52a-1b52-4cf5-b717-3541e67354d3
 md"""
-!!! exercise "The physics"
-	3. Write a function that, given an environment and an action, advances the state of the pendulum based on the physics. The action should be an integer with at least 3 possible values descibing a set of discrete torques (including zero torque) that can be applied to the pendulum. The function should update the environment accordingly and essentially simulate a time step. The function should also calculate a reward (large reward when upright), and check if the pendulum has ''fallen''. The function should return the updated environment, the reward amount, and a boolean flag indicating whether the pendulum has fallen. For the condition of falling, choose $\pm 20$ degrees or less off the upright position; otherwise, the training might take too long as the simulation will last a very long time.
+## Taking Time Steps
 """
 
 # ╔═╡ 9351db83-bfec-4347-9eb8-9797d558814f
-function step!(e::InvertedPendulum, action::Int)
+function step!(e::InvertedPendulum3D, action::Tuple{Int, Int})
     dt = 0.05  # Time step
     torques = [-1.0, 0.0, 1.0]  # Discrete torques
-    torque = torques[action]
+    torque_x = torques[action[1]]
+    torque_y = torques[action[2]]
     
     # Equations of motion
-    θ_ddot = (-e.g / e.l * sin(e.θ) + torque)  # Simplified dynamics
-    e.θ_dot += θ_ddot * dt
-    e.θ += e.θ_dot * dt
+    θ_ddot_x = (-e.g / e.l * sin(e.θ_x) + torque_x)
+    θ_ddot_y = (-e.g / e.l * sin(e.θ_y) + torque_y)
+
+    # Update angular velocities and angles
+    e.θ_dot_x += θ_ddot_x * dt
+    e.θ_x += e.θ_dot_x * dt
+    e.θ_dot_y += θ_ddot_y * dt
+    e.θ_y += e.θ_dot_y * dt
     
     # Check if the pendulum has fallen
-    fallen = abs(e.θ) > (20 * π / 180)
+    fallen = abs(e.θ_x) > (20 * π / 180) || abs(e.θ_y) > (20 * π / 180)
     reward = if !fallen
-        1.0 - abs(e.θ)
+        1.0 - (abs(e.θ_x) + abs(e.θ_y))
     else
         -10.0
     end
@@ -175,59 +103,40 @@ function step!(e::InvertedPendulum, action::Int)
     return e, reward, fallen
 end
 
-
 # ╔═╡ bda8c4b0-35c9-4d40-94cb-b92581d627aa
 md"""
-!!! exercise "Defining the NN model"
-	4. Define a Flux model that takes in an array describing the state $s$ of the pendulum as input, and outputs an array $Q(s,a)$ of actions $a$; so, $a$ is the index of this output array whose length is the number of possible actions (torques) one can apply to the pendulum. Three fully connected layers should be ample. ADAM optimizer should work well. Return the model and the modelstate (result of Flux.setup()).
+## Defining the NN
 """
 
 # ╔═╡ ca2c9749-9ca0-4ece-b96e-3893800b76d7
-begin
-	state_dim = 3 # state array
-	n_actions = 3 # number of actions
-
-	function init_model()
-
-	# YOUR CODE HERE
-	model = Chain(Dense(state_dim, 16, relu),
-                  Dense(16, 16, relu),
-                  Dense(16, n_actions))
+function init_model()
+    model = Chain(Dense(6, 64, relu),  # Increased layer size
+                  Dense(64, 64, relu),
+                  Dense(64, 64, relu),
+                  Dense(64, 32, relu),
+                  Dense(32, 9))  # 3x3 possible actions (torques in x and y)
     return model, Flux.setup(Adam(), model)
-	
-	end
 end
 
 # ╔═╡ 95b3fb32-3bdb-4c81-9ec4-798a5469c855
 md"""
-!!! exercise "Using the NN model"
-	5. Write a function that, given a state and a number epsilon between 0 and 1, it returns an action that is either random (based on epsilon) or comes from the neural network model you defined above. You are assuming that the model is already trained. 
+## Adding in stochastic elements
 """
 
 # ╔═╡ 8067a8a6-038a-47f4-88ce-6e13d5358d58
 function choose_action(state, model, epsilon)
-
-	# YOUR CODE HERE
-	if rand() < epsilon
-        return rand(1:n_actions)  # Random action
+    if rand() < epsilon
+        return (rand(1:3), rand(1:3))  # Random action (exploration)
     else
         q_values = model(state)
-        return argmax(q_values)  # Best action
+        action_idx = argmax(q_values)
+        return (div(action_idx - 1, 3) + 1, mod(action_idx - 1, 3) + 1)
     end
-	
 end
 
 # ╔═╡ 82d59949-8760-404f-83ef-3e46404cac48
 md"""
-!!! exercise "Training the NN model"
-	6. Now we need a function that trains the neural network. This will be called from the main simulation code that we will write later below. The training data will be based on a random subset of a past states/actions/rewards. This means that, as you simulate the pendulum, you will need to push all this information onto a replay buffer. The replay buffer can be a global array of tuples with a recording of simulation data, and you can pick a random subset of 30 to 50 snapshots as training data. One epoch of training is enough as you will be calling this function many times. The challenge is to determine the ''correct'' true target output of the model to measure the loss function against... Consider the following:
-
-	```
-		q_values = model(states_in_training_set)	
-		next_q_values = model(next_states_in_training_set)
-	```
-
-	Note that the second line means that you need to record at every time snapshot the current state, but also the state that immediately follows it as determined by the physics dynamics. You should construct the ''correct'' `target_q_values` for your model from `q_values`, `next_q_values`, and the rewards associated with the actions in the training set. You might want to read up on reinforcement learning models; see for example section 3.1 of [An Introduction to ReinforcementLearning.jl](https://juliareinforcementlearning.org/blog/an_introduction_to_reinforcement_learning_jl_design_implementations_thoughts/). HINT: The gamma parameter in this reference is an argument of our function. 
+## Model Updating 
 """
 
 # ╔═╡ 4e377f3f-0006-47fd-a842-ad0b359b622a
@@ -240,87 +149,115 @@ function update_model!(model, modelstate, gamma, buffer)
     
     target_q_values = q_values'
     for i in 1:length(batch)
-        target_q_values[i, actions[i]] = rewards[i] + gamma * maximum(next_q_values[:, i])
+        action_idx = (actions[i][1] - 1) * 3 + actions[i][2]
+        target_q_values[i, action_idx] = rewards[i] + gamma * maximum(next_q_values[:, i])
     end
     
     loss, grads = Flux.withgradient(m -> sum((m(hcat(states...))' .- target_q_values) .^ 2), model)
-
+    
+    println("Loss: ", loss)  # Debugging loss values
     Flux.update!(modelstate, model, grads[1])
-	
-	
 end
 
 # ╔═╡ d7366fd9-d0ae-4af4-8587-300f3e87616d
 md"""
-!!! exercise "The Final Step"
-	7. Now, running the simulation and training. Write a for loop that basically simulates a number of episodes of the pendulun, each time starting with the pendulum upright, zero rewards, and running time forward step by step until the pendulum falls down. You will need a loop within this for loop that calls `step!()` from above to advance time forward. Make sure you record everything needed for training in a replay buffer array. During the simulation, if your `replay_buffer` has enough samples to make a reasonable training set (30-50 time snapshots), call `update_model!()` to train your model. Keep also track of the sum of all rewards and push it onto the `total_rewards` array. After each episode, print out the total reward for the episode. 
+## Model Training
 """
 
 # ╔═╡ 377592e5-c13a-4f03-858d-691b326683b1
-begin	
+begin
 	gamma = 0.99
 	epsilon = 0.1
 	total_rewards = []
 	replay_buffer = []
-
+	loss_history = []
+	
 	model, modelstate = init_model()
 	last_episode_states = []  # Store states for animation
-
+	
 	@progress for episode in 1:100
-    env = InvertedPendulum()
-    reset!(env)
-    total_reward = 0
-    done = false
-    counter = 0
-	max_steps = 1000  # Debug: Ensure episodes don't last too long
-
-    
-    
-     while !done && counter < max_steps
-        counter += 1
-        state = get_state(env)
-        action = choose_action(state, model, epsilon)
-        next_env, reward, done = step!(env, action)
-        push!(replay_buffer, (state, action, reward, get_state(next_env)))
-		push!(last_episode_states, state[1])  # Store only theta for animation
-        total_reward += reward
-        
-        if length(replay_buffer) > 50
-            update_model!(model, modelstate, gamma, replay_buffer)
-        end
-    end
-    push!(total_rewards, total_reward)
-    if counter > 3000
-		println("Stopping early, model stabilized")
-        break
-    end
+	    println("Starting episode $episode")  # Debugging episode start
+	    env = InvertedPendulum3D()
+	    reset!(env)
+	    total_reward = 0
+	    done = false
+	    counter = 0
+	    max_steps = 500  # Debug: Ensure episodes don't last too long
+	    
+	    last_episode_states = []  # Store states for animation
+	    
+	    while !done && counter < max_steps
+	        counter += 1
+	        state = get_state(env)
+	        action = choose_action(state, model, epsilon)
+	        next_env, reward, done = step!(env, action)
+	        push!(replay_buffer, (state, action, reward, get_state(next_env)))
+	        push!(last_episode_states, (state[1], state[2]))  # Store (θ_x, θ_y) for animation
+	        total_reward += reward
+	        
+	        if length(replay_buffer) > 50 && counter % 10 == 0
+	            println("Training at step $counter")  # Debugging training step
+	            loss = update_model!(model, modelstate, gamma, replay_buffer)
+	            push!(loss_history, loss)  # Store loss for plotting
+	        end
+	    end
+	    push!(total_rewards, total_reward)
+	    println("Episode $episode finished with total reward: $total_reward")  # Debugging episode completion
+	    
+	    if counter > 3000
+	        println("Stopping early, model stabilized")
+	        break
+	    end
+	end
 end
-end
 
-# ╔═╡ e49436e3-ceae-4e0a-a31e-72593e06249b
+# ╔═╡ f81197b6-ee89-41dc-b47f-0905b1319048
 md"""
-!!! exercise "Inspection"
-	To inspect your trained model, plot the position of the pendulum from the replay_buffer as a function of time, as well as the total rewards as a function of episode. If you're up to it, try to do an animation of an episode using Makie.
+## Assessment and Visualization
 """
 
-# ╔═╡ 34692796-b828-4672-b0e0-546a06e90b5c
+# ╔═╡ 58725be8-d028-4cfd-823b-e5348cd1c1b0
 begin
-# Inspection: Plot the pendulum's angle over time and total rewards
-
 time_steps = 1:length(replay_buffer)
-theta_values = [step[1][1] for step in replay_buffer]
+θ_x_values = [step[1][1] for step in replay_buffer]
+θ_y_values = [step[1][2] for step in replay_buffer]
 
-Plots.plot(1:length(total_rewards), total_rewards, xlabel="Episode", ylabel="Total Reward", title="Total Rewards per Episode", legend=false, show=true)
+total_rewards_plot = Plots.plot(1:length(total_rewards), total_rewards, xlabel="Episode", ylabel="Total Reward", title="Total Rewards per Episode", legend=false)
 end
 
-# ╔═╡ 98e20f9a-ef8f-4f8c-9afa-10243a49d63e
-Plots.plot(time_steps, theta_values, xlabel="Time Step", ylabel="Theta (radians)", title="Pendulum Angle over Time", legend=false, show=true)
+# ╔═╡ 9de3c278-8ff0-4c63-bdbb-0e56cabf387d
+θ_x_plot = Plots.plot(time_steps, θ_x_values, xlabel="Time Step", ylabel="Theta_x (radians)", title="Pendulum Theta_x over Time", legend=false)
 
-# ╔═╡ 1748c639-4814-46be-8b12-9afe57c21dcf
-#My attempt to animate is below but I run into some naming bugs when Makie is here with plots.
+# ╔═╡ a88d3f4c-d900-46c5-931e-64dd9952bf9e
+θ_y_plot = Plots.plot(time_steps, θ_y_values, xlabel="Time Step", ylabel="Theta_y (radians)", title="Pendulum Theta_y over Time", legend=false)
 
-# ╔═╡ af861736-2ad8-4df8-8d20-108177238b65
-animate_pendulum(last_episode_states)
+# ╔═╡ de26804f-abc9-415a-8758-83986bc94764
+function plot_loss(loss_history)
+    plot(1:length(loss_history), loss_history, xlabel="Training Step", ylabel="Loss", title="Loss Over Training", legend=false)
+    display(plot)
+end
+
+# ╔═╡ 64c37237-cb3a-4fc1-9a52-932743d7a453
+function visualize_pendulum(states)
+    if isempty(states)
+        println("Error: No states recorded for visualization.")
+        return
+    end
+    
+    fig = GLMakie.Figure()
+    ax = Axis3(fig[1, 1], title="3D Pendulum Visualization", limits=(-1.2, 1.2, -1.2, 1.2, -1.2, 1.2))
+    
+    for (θ_x, θ_y) in states
+        lines!(ax, [0, cos(θ_x)], [0, sin(θ_x)], [0, sin(θ_y)], linewidth=3, color=:blue)
+        scatter!(ax, [cos(θ_x)], [sin(θ_x)], [sin(θ_y)], markersize=10, color=:red)
+        sleep(0.05)
+    end
+    display(fig)
+end
+
+
+# ╔═╡ 79d51e12-6bb7-494a-9ced-ad318428c20c
+visualize_pendulum(last_episode_states)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -329,7 +266,6 @@ Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
-ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
@@ -338,7 +274,6 @@ Flux = "~0.16.2"
 GLMakie = "~0.11.2"
 Plots = "~1.40.9"
 ProgressLogging = "~0.1.4"
-ProgressMeter = "~1.10.2"
 Statistics = "~1.11.1"
 """
 
@@ -348,7 +283,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.3"
 manifest_format = "2.0"
-project_hash = "4f7d306564cdae53798a7c5a65b4e0605b1eb205"
+project_hash = "ca2feb93f3a9d4d30fa30ae377f343050a81fd7c"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -2657,19 +2592,16 @@ version = "1.4.1+2"
 """
 
 # ╔═╡ Cell order:
-# ╟─8c5886c6-4cf0-4d85-9152-61dcce2048e1
-# ╠═b7b33d1e-6c41-4173-af0f-e75b82ea1bf7
 # ╟─be103db6-d2ce-11ef-0622-590223ed3118
-# ╟─1fa5e0e7-fb61-4b1c-a1ee-a6b71864f899
+# ╟─8f01207b-3a38-4c8b-8ecc-dbebd5185b1f
 # ╠═fac00ed9-e55b-4053-8fb7-0cd82fb5afb6
-# ╟─c628be92-228d-4d19-a5f4-662c889adda5
+# ╟─0ac324ae-2532-4d6a-89d2-5cd9207635e5
 # ╠═547da9b9-df02-4ef1-a021-81d59ca00f30
-# ╟─5933e431-849c-4725-a055-7c35da035a4f
-# ╟─e705f111-784d-4335-9481-1850a46b3171
+# ╟─aef17d2d-01a3-4d24-8666-603a1719c259
 # ╠═8e4cb8c0-6040-426f-ae4d-e9db1700bd19
-# ╟─e50e39a5-a702-40c3-9766-1a4b719d562d
+# ╟─5506ca50-33b2-4e3c-8322-f27b26d467ab
 # ╠═18b0e099-fbb4-4966-9529-e4d8f63a503b
-# ╟─834bdd6f-4e07-4170-8b56-3d6120f52996
+# ╟─55f1f52a-1b52-4cf5-b717-3541e67354d3
 # ╠═9351db83-bfec-4347-9eb8-9797d558814f
 # ╟─bda8c4b0-35c9-4d40-94cb-b92581d627aa
 # ╠═ca2c9749-9ca0-4ece-b96e-3893800b76d7
@@ -2679,11 +2611,12 @@ version = "1.4.1+2"
 # ╠═4e377f3f-0006-47fd-a842-ad0b359b622a
 # ╟─d7366fd9-d0ae-4af4-8587-300f3e87616d
 # ╠═377592e5-c13a-4f03-858d-691b326683b1
-# ╟─e49436e3-ceae-4e0a-a31e-72593e06249b
-# ╠═34692796-b828-4672-b0e0-546a06e90b5c
-# ╠═98e20f9a-ef8f-4f8c-9afa-10243a49d63e
-# ╠═1748c639-4814-46be-8b12-9afe57c21dcf
-# ╠═da94368f-5ef2-41e0-82b2-793f607fc85d
-# ╠═af861736-2ad8-4df8-8d20-108177238b65
+# ╟─f81197b6-ee89-41dc-b47f-0905b1319048
+# ╠═58725be8-d028-4cfd-823b-e5348cd1c1b0
+# ╠═9de3c278-8ff0-4c63-bdbb-0e56cabf387d
+# ╠═a88d3f4c-d900-46c5-931e-64dd9952bf9e
+# ╠═de26804f-abc9-415a-8758-83986bc94764
+# ╠═64c37237-cb3a-4fc1-9a52-932743d7a453
+# ╠═79d51e12-6bb7-494a-9ced-ad318428c20c
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
