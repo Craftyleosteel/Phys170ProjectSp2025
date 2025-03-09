@@ -95,7 +95,7 @@ function step!(e::InvertedPendulum3D, action::Tuple{Int, Int})
     # Check if the pendulum has fallen
     fallen = abs(e.θ_x) > (20 * π / 180) || abs(e.θ_y) > (20 * π / 180)
     reward = if !fallen
-        1.0 - (abs(e.θ_x) + abs(e.θ_y))
+        1.0 - (abs((e.θ_x)^2) + abs((e.θ_y)^2))
     else
         -10.0
     end
@@ -110,12 +110,15 @@ md"""
 
 # ╔═╡ ca2c9749-9ca0-4ece-b96e-3893800b76d7
 function init_model()
-    model = Chain(Dense(6, 64, relu),  # Increased layer size
-                  Dense(64, 64, relu),
-                  Dense(64, 64, relu),
-                  Dense(64, 32, relu),
-                  Dense(32, 9))  # 3x3 possible actions (torques in x and y)
-    return model, Flux.setup(Adam(), model)
+    model = Chain(
+        Dense(6, 128, leakyrelu),  # Increased neuron count
+        Dense(128, 128, leakyrelu),
+        Dense(128, 64, leakyrelu),
+        Dropout(0.2),  # Regularization
+        Dense(64, 32, leakyrelu),
+        Dense(32, 9)  # 3x3 possible actions (torques in x and y)
+    )
+    return model, Flux.setup(Adam(0.001), model)  # Reduced learning rate
 end
 
 # ╔═╡ 95b3fb32-3bdb-4c81-9ec4-798a5469c855
@@ -166,49 +169,48 @@ md"""
 
 # ╔═╡ 377592e5-c13a-4f03-858d-691b326683b1
 begin
-	gamma = 0.99
-	epsilon = 0.1
+	gamma = 0.95  # Slightly reduced discount factor for stability
+	epsilon = 0.1  # Exploration rate
 	total_rewards = []
 	replay_buffer = []
 	loss_history = []
-	
 	model, modelstate = init_model()
 	last_episode_states = []  # Store states for animation
 	
-	@progress for episode in 1:100
-	    println("Starting episode $episode")  # Debugging episode start
-	    env = InvertedPendulum3D()
-	    reset!(env)
-	    total_reward = 0
-	    done = false
-	    counter = 0
-	    max_steps = 500  # Debug: Ensure episodes don't last too long
-	    
-	    last_episode_states = []  # Store states for animation
-	    
-	    while !done && counter < max_steps
-	        counter += 1
-	        state = get_state(env)
-	        action = choose_action(state, model, epsilon)
-	        next_env, reward, done = step!(env, action)
-	        push!(replay_buffer, (state, action, reward, get_state(next_env)))
-	        push!(last_episode_states, (state[1], state[2]))  # Store (θ_x, θ_y) for animation
-	        total_reward += reward
-	        
-	        if length(replay_buffer) > 50 && counter % 10 == 0
-	            println("Training at step $counter")  # Debugging training step
-	            loss = update_model!(model, modelstate, gamma, replay_buffer)
-	            push!(loss_history, loss)  # Store loss for plotting
-	        end
-	    end
-	    push!(total_rewards, total_reward)
-	    println("Episode $episode finished with total reward: $total_reward")  # Debugging episode completion
-	    
-	    if counter > 3000
-	        println("Stopping early, model stabilized")
-	        break
-	    end
-	end
+@progress for episode in 1:150  # Increased episodes for better learning
+    println("Starting episode $episode")  # Debugging episode start
+    env = InvertedPendulum3D()
+    reset!(env)
+    total_reward = 0
+    done = false
+    counter = 0
+    max_steps = 600  # Allow longer training episodes
+    
+    last_episode_states = []  # Store states for animation
+    
+    while !done && counter < max_steps
+        counter += 1
+        state = get_state(env)
+        action = choose_action(state, model, epsilon)
+        next_env, reward, done = step!(env, action)
+        push!(replay_buffer, (state, action, reward, get_state(next_env)))
+        push!(last_episode_states, (state[1], state[2]))  # Store (θ_x, θ_y) for animation
+        total_reward += reward
+        
+        if length(replay_buffer) > 100 && counter % 5 == 0  # More frequent updates
+            println("Training at step $counter")  # Debugging training step
+            loss = update_model!(model, modelstate, gamma, replay_buffer)
+            push!(loss_history, loss)  # Store loss for plotting
+        end
+    end
+    push!(total_rewards, total_reward)
+    println("Episode $episode finished with total reward: $total_reward")  # Debugging episode completion
+    
+    if counter > 5000
+        println("Stopping early, model stabilized")
+        break
+    end
+end
 end
 
 # ╔═╡ f81197b6-ee89-41dc-b47f-0905b1319048
