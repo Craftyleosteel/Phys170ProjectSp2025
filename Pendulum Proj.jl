@@ -224,7 +224,7 @@ time_steps = 1:length(replay_buffer)
 θ_x_values = [step[1][1] for step in replay_buffer]
 θ_y_values = [step[1][2] for step in replay_buffer]
 
-total_rewards_plot = Plots.plot(1:length(total_rewards), total_rewards, xlabel="Episode", ylabel="Total Reward", title="Total Rewards per Episode", legend=false)
+total_rewards_plot = Plots.plot(1:length(total_rewards), total_rewards, xlabel="Episode", ylabel="Total Reward", title="Total Rewards Per Episode", legend=false)
 end
 
 # ╔═╡ 9de3c278-8ff0-4c63-bdbb-0e56cabf387d
