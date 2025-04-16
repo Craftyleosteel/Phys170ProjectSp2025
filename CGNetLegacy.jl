@@ -98,36 +98,17 @@ md"""
 
 # ╔═╡ 3746a4e2-62c3-4473-b7bc-eab0b07e42e5
 CGnet = Chain(
-	Dense(1, 20, relu),
-	Dense(20, 20, relu),
-	Dense(20, 1)
+	Dense(1, 50, tanh),
+	Dense(50, 50, tanh),
+	Dense(50, 1) # output is scalar free energy
 )
-#Smaller and simpler than the NN in the paper to help it train faster because we are working with a toy model. For a full implementation you may want to use this NN below: 
-#
-#CGnet = Chain(
-#	Dense(1, 50, tanh),
-#	Dense(50, 50, tanh),
-#	Dense(50, 1) # output is scalar free energy
-#)
 
 # ╔═╡ 5cc05899-400f-4baf-a983-2d85cdac14d8
 md"""
 ## Define The Loss Function
 """
 
-# ╔═╡ 5552f664-c1bb-4c83-89aa-dcea9a5fce12
-function batch_loss(xb, fb)
-    preds = map(xb) do x
-        U(x) = CGnet([x])[1]
-        -Zygote.gradient(U, x)[1]
-    end
-    return mean((preds .- fb).^2)
-end
-
-
 # ╔═╡ c2c14a98-4de3-4594-8cdd-82840b142192
-# ╠═╡ disabled = true
-#=╠═╡
 function loss_fn(xs, fs)
     preds = map(xs) do x
         U(x) = CGnet([x])[1]
@@ -135,52 +116,13 @@ function loss_fn(xs, fs)
     end
     return mean((preds .- fs).^2)
 end
-  ╠═╡ =#
 
 # ╔═╡ 2880942e-288a-4fd3-9bc6-b20be2b9593d
 md"""
 ## Train the NN
 """
 
-# ╔═╡ 9d72129f-06ae-4b5f-9074-399094da26e5
-begin
-sample_inds = rand(1:length(x_vals), 5000)
-x_train = x_vals[sample_inds]
-f_train = fx_vals[sample_inds]
-end
-
-# ╔═╡ 65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
-begin
-	opt = Optimisers.Adam(0.01)
-	state = Optimisers.setup(opt, CGnet)
-
-	batchsize = 256
-	num_epochs = 20
-	loss_history = Float64[]
-
-	p = Progress(num_epochs, desc = "Training CGnet...")
-
-	for epoch in 1:num_epochs
-		epoch_loss = 0.0
-		shuffle_inds = shuffle(1:length(x_train))
-
-		for i in 1:batchsize:length(x_train)
-			idx = shuffle_inds[i:min(i+batchsize-1, end)]
-			grads = Zygote.gradient(CGnet) do m
-				batch_loss(x_train[idx], f_train[idx])
-			end
-			state = Optimisers.update!(state, Flux.trainable(CGnet), grads)
-			epoch_loss += batch_loss(x_train[idx], f_train[idx])
-		end
-
-		push!(loss_history, epoch_loss)
-		update!(p, epoch)
-	end
-end
-
 # ╔═╡ 3c955386-567e-4afd-a71b-55b195f44ea6
-# ╠═╡ disabled = true
-#=╠═╡
 begin
 
 opt = Optimisers.Adam(0.01)
@@ -203,21 +145,14 @@ num_epochs = 50
 	push!(loss_history, loss)
 end
 end
-  ╠═╡ =#
 
 # ╔═╡ e873199b-575b-4f7d-90d2-32f60b847e7e
 md"""
 ## Check Convergence Of Training
 """
 
-# ╔═╡ ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
-plot(loss_history, xlabel="Epoch", ylabel="Loss", label="Training Loss", lw=2, title="CGnet Fast Training Loss")
-
 # ╔═╡ 627c09e1-8884-431d-9db7-9c7d5485bcfa
-# ╠═╡ disabled = true
-#=╠═╡
 plot(loss_history, label="Training Loss", xlabel="Epoch", ylabel="Loss", lw=2, legend=:topright)
-  ╠═╡ =#
 
 # ╔═╡ d1c22034-ee3b-44e9-b9d9-a11797131867
 md"""
@@ -2125,14 +2060,10 @@ version = "1.4.1+2"
 # ╟─9e313963-c0ff-447e-86d1-9d96d503d5f5
 # ╠═3746a4e2-62c3-4473-b7bc-eab0b07e42e5
 # ╟─5cc05899-400f-4baf-a983-2d85cdac14d8
-# ╠═5552f664-c1bb-4c83-89aa-dcea9a5fce12
 # ╠═c2c14a98-4de3-4594-8cdd-82840b142192
 # ╟─2880942e-288a-4fd3-9bc6-b20be2b9593d
-# ╠═9d72129f-06ae-4b5f-9074-399094da26e5
-# ╠═65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
 # ╠═3c955386-567e-4afd-a71b-55b195f44ea6
 # ╟─e873199b-575b-4f7d-90d2-32f60b847e7e
-# ╠═ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
 # ╠═627c09e1-8884-431d-9db7-9c7d5485bcfa
 # ╟─d1c22034-ee3b-44e9-b9d9-a11797131867
 # ╠═6796e99f-73ab-4f02-94dd-c64eb4284180
