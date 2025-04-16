@@ -38,7 +38,7 @@ md"""
 """
 
 # ╔═╡ 7a63dbc2-c063-4866-a961-58ea3d594338
-function V(x, y)
+function V(x, y) #Toy potential from paper
 	xterm = (x - 4)*(x + 2)*(x - 2)*(x + 3)
 	ripples = (1/25) * sin(3 * (x + 5) * (x + 6))
 	return (1/50) * xterm + 0.5 * y^2 + ripples
@@ -52,6 +52,7 @@ md"""
 # ╔═╡ 0a67a981-8dbc-435f-a5b0-0a50485ea676
 begin
 function simulate_trajectory(T, τ, D, seed)
+	"""Simulates the trajectory for T particles in a potential"""
 	Random.seed!(seed)
 	x, y = 0.0, 0.0
 	traj = zeros(T, 2)
@@ -117,25 +118,14 @@ md"""
 
 # ╔═╡ 5552f664-c1bb-4c83-89aa-dcea9a5fce12
 function batch_loss(xb, fb)
-    preds = map(xb) do x
-        U(x) = CGnet([x])[1]
-        -Zygote.gradient(U, x)[1]
+    loss = 0.0
+    for (x, f_true) in zip(xb, fb)
+        y, back = Flux.pullback(x -> CGnet([x])[1], x)
+        f_pred = -back(1.0)[1]  # This is ∂U/∂x (negative is force)
+        loss += (f_pred - f_true)^2
     end
-    return mean((preds .- fb).^2)
+    return loss / length(xb)
 end
-
-
-# ╔═╡ c2c14a98-4de3-4594-8cdd-82840b142192
-# ╠═╡ disabled = true
-#=╠═╡
-function loss_fn(xs, fs)
-    preds = map(xs) do x
-        U(x) = CGnet([x])[1]
-        -Zygote.gradient(U, x)[1]
-    end
-    return mean((preds .- fs).^2)
-end
-  ╠═╡ =#
 
 # ╔═╡ 2880942e-288a-4fd3-9bc6-b20be2b9593d
 md"""
@@ -147,6 +137,8 @@ begin
 sample_inds = rand(1:length(x_vals), 5000)
 x_train = x_vals[sample_inds]
 f_train = fx_vals[sample_inds]
+x_train = Float32.(x_train)
+f_train = Float32.(f_train)
 end
 
 # ╔═╡ 65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
@@ -154,56 +146,24 @@ begin
 	opt = Optimisers.Adam(0.01)
 	state = Optimisers.setup(opt, CGnet)
 
-	batchsize = 256
 	num_epochs = 20
+	batchsize = 256
 	loss_history = Float64[]
-
-	p = Progress(num_epochs, desc = "Training CGnet...")
 
 	for epoch in 1:num_epochs
 		epoch_loss = 0.0
-		shuffle_inds = shuffle(1:length(x_train))
-
+		inds = shuffle(1:length(x_train))
 		for i in 1:batchsize:length(x_train)
-			idx = shuffle_inds[i:min(i+batchsize-1, end)]
+			idx = inds[i:min(i+batchsize-1, end)]
 			grads = Zygote.gradient(CGnet) do m
 				batch_loss(x_train[idx], f_train[idx])
 			end
 			state = Optimisers.update!(state, Flux.trainable(CGnet), grads)
 			epoch_loss += batch_loss(x_train[idx], f_train[idx])
 		end
-
 		push!(loss_history, epoch_loss)
-		update!(p, epoch)
 	end
 end
-
-# ╔═╡ 3c955386-567e-4afd-a71b-55b195f44ea6
-# ╠═╡ disabled = true
-#=╠═╡
-begin
-
-opt = Optimisers.Adam(0.01)
-state = Optimisers.setup(opt, CGnet)
-
-loss_history = Float64[]
-num_epochs = 50
-
-@showprogress 1 "Training CGnet..." for epoch in 1:num_epochs
-	# Compute gradients using the model
-	grads = Zygote.gradient(CGnet) do model
-		loss_fn(x_vals, fx_vals)
-	end
-
-	# Apply gradient update
-	state, CGnet = Optimisers.update(state, CGnet, grads)
-
-	# Track loss
-	loss = loss_fn(x_vals, fx_vals)
-	push!(loss_history, loss)
-end
-end
-  ╠═╡ =#
 
 # ╔═╡ e873199b-575b-4f7d-90d2-32f60b847e7e
 md"""
@@ -212,12 +172,6 @@ md"""
 
 # ╔═╡ ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
 plot(loss_history, xlabel="Epoch", ylabel="Loss", label="Training Loss", lw=2, title="CGnet Fast Training Loss")
-
-# ╔═╡ 627c09e1-8884-431d-9db7-9c7d5485bcfa
-# ╠═╡ disabled = true
-#=╠═╡
-plot(loss_history, label="Training Loss", xlabel="Epoch", ylabel="Loss", lw=2, legend=:topright)
-  ╠═╡ =#
 
 # ╔═╡ d1c22034-ee3b-44e9-b9d9-a11797131867
 md"""
@@ -2126,14 +2080,11 @@ version = "1.4.1+2"
 # ╠═3746a4e2-62c3-4473-b7bc-eab0b07e42e5
 # ╟─5cc05899-400f-4baf-a983-2d85cdac14d8
 # ╠═5552f664-c1bb-4c83-89aa-dcea9a5fce12
-# ╠═c2c14a98-4de3-4594-8cdd-82840b142192
 # ╟─2880942e-288a-4fd3-9bc6-b20be2b9593d
 # ╠═9d72129f-06ae-4b5f-9074-399094da26e5
 # ╠═65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
-# ╠═3c955386-567e-4afd-a71b-55b195f44ea6
 # ╟─e873199b-575b-4f7d-90d2-32f60b847e7e
 # ╠═ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
-# ╠═627c09e1-8884-431d-9db7-9c7d5485bcfa
 # ╟─d1c22034-ee3b-44e9-b9d9-a11797131867
 # ╠═6796e99f-73ab-4f02-94dd-c64eb4284180
 # ╟─b167a683-0a84-4196-bcb4-4a6913fc8435
