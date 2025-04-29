@@ -79,26 +79,17 @@ md"""
 
 # ╔═╡ b5610bfd-c1b1-438c-bbad-074e45bc1578
 begin
-# Function to compute the instantaneous forces along a trajectory
 function compute_instantaneous_forces(traj)
-    forces = []  # store computed force values
-    xs = []      # store x-positions
-
-    # Loop over each (x, y) point in the trajectory
-    for (x, y) in eachrow(traj)
-        # Compute the force as the negative gradient of the potential V with respect to x
-        Fx = -Zygote.gradient(z -> V(z, y), x)[1]
-
-        # Save x and corresponding force
-        push!(forces, Fx)
-        push!(xs, x)
-    end
-
-    # Convert collected values to vectors (as columns) and return
-    return hcat(xs...), hcat(forces...)
+	forces = []
+	xs = []
+	for (x, y) in eachrow(traj)
+		Fx = -Zygote.gradient(z -> V(z, y), x)[1]
+		push!(forces, Fx)
+		push!(xs, x)
+	end
+	return hcat(xs...), hcat(forces...)
 end
 
-# Compute input features (x_vals) and force labels (fx_vals) from the trajectory
 x_vals, fx_vals = compute_instantaneous_forces(traj)
 end
 
@@ -137,7 +128,7 @@ CGnet = Chain(
 CGnet = gpu(CGnet)
 
 # Move training data to GPU once
-x_train_gpu = gpu(reshape(x_train, 1, :))  # shape: (1, 5000)
+x_train_gpu = gpu(reshape(Float32.(x_train), :, 1))  # (batchsize, 1)
 f_train_gpu = gpu(Float32.(f_train))                 # (batchsize,)
 end
 
@@ -151,14 +142,22 @@ end
 #)
 
 # ╔═╡ 5552f664-c1bb-4c83-89aa-dcea9a5fce12
+# Computes the mean squared error between predicted and true forces
 function batch_loss_fast_gpu(xb, fb)
-    # Forward pass: compute energy
-    y, back = Zygote.pullback(x -> sum(CGnet(x)), xb)
+	# Forward pass: predict energy
+	y = CGnet(xb)[:, 1]
 
-    # Gradient of energy wrt input x is the force
-    f_pred = -back(1f0)[1]
+	# Backward pass: compute gradient ∂U/∂x using Zygote
+	grads = Zygote.gradient(() -> sum(y)) do
+		y = CGnet(xb)[:, 1]
+		sum(y)
+	end
 
-    return mean((f_pred .- fb).^2)
+	# Predicted force is negative energy gradient
+	f_pred = -grads[1]
+
+	# Return mean squared error between predicted and true forces
+	return mean((f_pred .- fb).^2)
 end
 
 # ╔═╡ 65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
@@ -176,7 +175,7 @@ begin
 
 		for i in 1:batchsize:length(inds)
 			idx = inds[i:min(i + batchsize - 1, end)]
-			xb = x_train_gpu[:, idx]  # slices by column index (i.e., batch)
+			xb = x_train_gpu[idx, :]
 			fb = f_train_gpu[idx]
 
 			# Compute gradients and update weights
