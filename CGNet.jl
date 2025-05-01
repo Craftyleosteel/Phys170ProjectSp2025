@@ -7,15 +7,11 @@ using InteractiveUtils
 # ╔═╡ d0c11460-6e24-4960-9e3c-c67c572272b4
 begin
 	using Flux
-	using Zygote
-	using LinearAlgebra
-	using Random
-	using Distributions
-	using Plots
-	using Statistics
-	using ProgressMeter
-	using ThreadsX
+	using Optimisers
 	using CUDA
+	using Random
+	using Statistics
+	using Plots
 end
 
 # ╔═╡ 1f58cc07-0388-4d62-a73d-5b352227111a
@@ -39,10 +35,9 @@ md"""
 """
 
 # ╔═╡ 7a63dbc2-c063-4866-a961-58ea3d594338
-function V(x, y) #Toy potential from paper
-	xterm = (x - 4)*(x + 2)*(x - 2)*(x + 3)
-	ripples = (1/25) * sin(3 * (x + 5) * (x + 6))
-	return (1/50) * xterm + 0.5 * y^2 + ripples
+# Harmonic potential: V(x, y) = ½x² + ½y²
+function V(x, y)
+    return 0.5 * x^2 + 0.5 * y^2
 end
 
 # ╔═╡ 6ed893e2-8186-4870-a22f-0da60934ff13
@@ -52,24 +47,12 @@ md"""
 
 # ╔═╡ 0a67a981-8dbc-435f-a5b0-0a50485ea676
 begin
-function simulate_trajectory(T, τ, D, seed)
-	"""Simulates the trajectory for T particles in a potential"""
-	Random.seed!(seed)
-	x, y = 0.0, 0.0
-	traj = zeros(T, 2)
-	for t in 1:T
-		∂Vx = Zygote.gradient(z -> V(z, y), x)[1]
-		∂Vy = Zygote.gradient(z -> V(x, z), y)[1]
-		x -= τ * ∂Vx + sqrt(2 * D * τ) * randn()
-		y -= τ * ∂Vy + sqrt(2 * D * τ) * randn()
-		traj[t, :] .= (x, y)
-	end
-	return traj
-end
+	# Generate a simple trajectory: uniform samples in (x, y)
+n_samples = 5000
+Random.seed!(123)
 
-#High level threading implementation
-all_trajs = ThreadsX.map(i -> simulate_trajectory(10_000, 0.01, 1.0, 42 + i), 1:100) 
-traj = vcat(all_trajs...)
+traj = [rand(Float32)*4f0 .- 2f0 for _ in 1:n_samples, __ in 1:2]  # (n_samples, 2)
+traj = reduce(vcat, traj)'
 end
 
 # ╔═╡ ebe02d8f-b03a-4535-a695-7620e95ac598
@@ -79,27 +62,21 @@ md"""
 
 # ╔═╡ b5610bfd-c1b1-438c-bbad-074e45bc1578
 begin
-# Function to compute the instantaneous forces along a trajectory
+# Compute x-values and true forces from harmonic potential
 function compute_instantaneous_forces(traj)
-    forces = []  # store computed force values
-    xs = []      # store x-positions
-
-    # Loop over each (x, y) point in the trajectory
-    for (x, y) in eachrow(traj)
-        # Compute the force as the negative gradient of the potential V with respect to x
-        Fx = -Zygote.gradient(z -> V(z, y), x)[1]
-
-        # Save x and corresponding force
-        push!(forces, Fx)
-        push!(xs, x)
-    end
-
-    # Convert collected values to vectors (as columns) and return
-    return hcat(xs...), hcat(forces...)
+    xs = traj[:, 1]
+    fx = -xs  # F = -∂V/∂x = -x
+    return xs, fx
 end
 
-# Compute input features (x_vals) and force labels (fx_vals) from the trajectory
 x_vals, fx_vals = compute_instantaneous_forces(traj)
+end
+
+# ╔═╡ 503f414d-ac75-47c9-af64-bb9f92dfea1c
+begin
+# Convert to Float32 and shape for Flux (features, batch_size)
+x_train_gpu = gpu(reshape(Float32.(x_vals), 1, :))  # shape: (1, 5000)
+f_train_gpu = gpu(Float32.(fx_vals))               # shape: (5000,)
 end
 
 # ╔═╡ 9e313963-c0ff-447e-86d1-9d96d503d5f5
@@ -107,90 +84,64 @@ md"""
 ## Define the Neural Network
 """
 
+# ╔═╡ 3746a4e2-62c3-4473-b7bc-eab0b07e42e5
+begin
+CGnet = Chain(
+    Dense(1, 32, relu),
+    Dense(32, 32, relu),
+    Dense(32, 1)
+) |> gpu  # move to GPU
+end
+
 # ╔═╡ 5cc05899-400f-4baf-a983-2d85cdac14d8
 md"""
 ## Define The Loss Function
 """
+
+# ╔═╡ 5552f664-c1bb-4c83-89aa-dcea9a5fce12
+function batch_loss_fast_gpu(xb, fb)
+    f_pred = CGnet(xb)[1, :]  # (1, batch_size) ⇒ slice to (batch_size,)
+    return mean((f_pred .- fb).^2)
+end
+
 
 # ╔═╡ 2880942e-288a-4fd3-9bc6-b20be2b9593d
 md"""
 ## Train the NN
 """
 
-# ╔═╡ 9d72129f-06ae-4b5f-9074-399094da26e5
-# Sample a subset of the data and convert to Float32
-begin
-	sample_inds = rand(1:length(x_vals), 5000)
-	x_train = Float32.(x_vals[sample_inds])
-	f_train = Float32.(fx_vals[sample_inds])
-end
-
-
-# ╔═╡ 3746a4e2-62c3-4473-b7bc-eab0b07e42e5
-begin
-CGnet = Chain(
-	Dense(1, 20, relu),
-	Dense(20, 20, relu),
-	Dense(20, 1)
-)
-# Move model to GPU
-CGnet = gpu(CGnet)
-
-# Move training data to GPU once
-x_train_gpu = gpu(reshape(x_train, 1, :))  # shape: (1, 5000)
-f_train_gpu = gpu(Float32.(f_train))                 # (batchsize,)
-end
-
-
-#Smaller and simpler than the NN in the paper to help it train faster because we are working with a toy model. For a full implementation you may want to use this NN below: 
-#
-#CGnet = Chain(
-#	Dense(1, 50, tanh),
-#	Dense(50, 50, tanh),
-#	Dense(50, 1) # output is scalar free energy
-#)
-
-# ╔═╡ 5552f664-c1bb-4c83-89aa-dcea9a5fce12
-function batch_loss_fast_gpu(xb, fb)
-    # Forward pass: compute energy
-    y, back = Zygote.pullback(x -> sum(CGnet(x)), xb)
-
-    # Gradient of energy wrt input x is the force
-    f_pred = -back(1f0)[1]
-
-    return mean((f_pred .- fb).^2)
-end
-
 # ╔═╡ 65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
 begin
 	opt = Optimisers.Adam(0.01)
-	state = Optimisers.setup(opt, Flux.trainable(CGnet))
+	
+	let
+	    state = Optimisers.setup(opt, Flux.trainable(CGnet))
+	
+	    num_epochs = 20
+	    batchsize = 256
+	    loss_history = Float64[]
+	
+	    for epoch in 1:num_epochs
+	        epoch_loss = 0.0
+	        inds = shuffle(1:size(x_train_gpu, 2))
+	
+	        for i in 1:batchsize:length(inds)
+    			idx = inds[i:min(i + batchsize - 1, end)]
+    			xb = x_train_gpu[:, idx]
+    			fb = f_train_gpu[idx]
 
-	num_epochs = 20
-	batchsize = 256
-	loss_history = Float64[]
+    			grads = let xb=xb, fb=fb, CGnet=CGnet
+       	 		Flux.gradient(() -> batch_loss_fast_gpu(xb, fb), Flux.trainable(CGnet))
+    end
 
-	for epoch in 1:num_epochs
-		epoch_loss = 0.0
-		inds = shuffle(1:size(x_train_gpu, 1))
+    state = Optimisers.update!(state, Flux.trainable(CGnet), grads)
+    epoch_loss += batch_loss_fast_gpu(xb, fb)
+end
 
-		for i in 1:batchsize:length(inds)
-			idx = inds[i:min(i + batchsize - 1, end)]
-			xb = x_train_gpu[:, idx]  # slices by column index (i.e., batch)
-			fb = f_train_gpu[idx]
-
-			# Compute gradients and update weights
-			grads = Zygote.gradient(Flux.params(CGnet)) do
-				batch_loss_fast_gpu(xb, fb)
-			end
-			state = Optimisers.update!(state, Flux.trainable(CGnet), grads)
-
-			# Accumulate loss for this batch
-			epoch_loss += batch_loss_fast_gpu(xb, fb)
-		end
-
-		# Log total loss for this epoch
-		push!(loss_history, epoch_loss)
+	
+	        push!(loss_history, epoch_loss)
+	        println("Epoch $epoch - Loss = $(round(epoch_loss, digits=4))")
+	    end
 	end
 end
 
@@ -200,7 +151,7 @@ md"""
 """
 
 # ╔═╡ ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
-plot(loss_history, xlabel="Epoch", ylabel="Loss", label="Training Loss", lw=2, title="CGnet Fast Training Loss")
+plot(loss_history, xlabel="Epoch", ylabel="Loss", title="Training Loss (Force Prediction)", lw=2)
 
 # ╔═╡ d1c22034-ee3b-44e9-b9d9-a11797131867
 md"""
@@ -209,61 +160,33 @@ md"""
 
 # ╔═╡ 6796e99f-73ab-4f02-94dd-c64eb4284180
 begin
-xs_plot = collect(-5.5:0.1:5.5)
-mean_force = [mean(fx_vals[i] for i in findall(abs.(x_vals .- x) .< 0.05)) for x in xs_plot]
-pred_force = [-Zygote.gradient(x -> CGnet([x])[1], x)[1] for x in xs_plot]
+x_test = collect(-2f0:0.01f0:2f0)
+x_test_gpu = reshape(gpu(x_test), 1, :)
 
-plot(xs_plot, mean_force, label="Mean Force (Exact)", lw=2)
-plot!(xs_plot, pred_force, label="CGnet Force", lw=2, ls=:dash)
-scatter!(x_vals[1:1000], fx_vals[1:1000], label="Instantaneous Forces", alpha=0.3, ms=2)
-xlabel!("x")
-ylabel!("Force")
-title!("Force Matching: CGnet vs Ground Truth")
-end
+f_pred = CGnet(x_test_gpu)[1, :] |> collect
+f_true = -x_test
 
-# ╔═╡ b167a683-0a84-4196-bcb4-4a6913fc8435
-md"""
-## Visualize The Potential
-"""
+plot(x_test, f_true, label="True F = -x", lw=2)
+plot!(x_test, f_pred, label="CGnet Prediction", lw=2, ls=:dash)
 
-# ╔═╡ 535495c2-416d-40ec-a7c0-3242b7fdbe2a
-begin
-U_exact(x) = -log(sum(exp.(-[V(x, y) for y in -4:0.1:4])) + 1e-10)
-U_net(x) = CGnet([x])[1]
-
-U_exact_vals = [U_exact(x) for x in xs_plot]
-U_net_vals = [U_net(x) for x in xs_plot]
-
-plot(xs_plot, U_exact_vals .- minimum(U_exact_vals), label="Exact PMF", lw=2)
-plot!(xs_plot, U_net_vals .- minimum(U_net_vals), label="CGnet PMF", lw=2, ls=:dash)
-xlabel!("x")
-ylabel!("Free Energy")
-title!("Potential of Mean Force")
 end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
-Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
-LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Optimisers = "3bd65402-5787-11e9-1adc-39752487f4e2"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-ThreadsX = "ac1d9e8a-700a-412c-b207-f0111f4b6c0d"
-Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
 CUDA = "~5.6.1"
-Distributions = "~0.25.117"
 Flux = "~0.16.2"
+Optimisers = "~0.4.4"
 Plots = "~1.40.9"
-ProgressMeter = "~1.10.2"
 Statistics = "~1.11.1"
-ThreadsX = "~0.1.12"
-Zygote = "~0.7.3"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
@@ -272,7 +195,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.3"
 manifest_format = "2.0"
-project_hash = "a1b42e1ddc15d3ae2fa025bc7ab6f54f44fb7e7e"
+project_hash = "08d51271756c10ab66db313f85187502d091bd15"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -628,22 +551,6 @@ deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 version = "1.11.0"
 
-[[deps.Distributions]]
-deps = ["AliasTables", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns"]
-git-tree-sha1 = "03aa5d44647eaec98e1920635cdfed5d5560a8b9"
-uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
-version = "0.25.117"
-
-    [deps.Distributions.extensions]
-    DistributionsChainRulesCoreExt = "ChainRulesCore"
-    DistributionsDensityInterfaceExt = "DensityInterface"
-    DistributionsTestExt = "Test"
-
-    [deps.Distributions.weakdeps]
-    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
-    DensityInterface = "b429d917-457f-4dbc-8f4c-0cc954292b1d"
-    Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
-
 [[deps.DocStringExtensions]]
 deps = ["LibGit2"]
 git-tree-sha1 = "2fb1e02f2b635d0845df5d7c167fec4dd739b00d"
@@ -720,12 +627,16 @@ deps = ["LinearAlgebra"]
 git-tree-sha1 = "6a70198746448456524cb442b8af316927ff3e1a"
 uuid = "1a297f60-69ca-5386-bcde-b61e274b549b"
 version = "1.13.0"
-weakdeps = ["PDMats", "SparseArrays", "Statistics"]
 
     [deps.FillArrays.extensions]
     FillArraysPDMatsExt = "PDMats"
     FillArraysSparseArraysExt = "SparseArrays"
     FillArraysStatisticsExt = "Statistics"
+
+    [deps.FillArrays.weakdeps]
+    PDMats = "90014a1f-27ba-587c-ab20-58faa44d9150"
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+    Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [[deps.FixedPointNumbers]]
 deps = ["Statistics"]
@@ -874,12 +785,6 @@ version = "8.5.0+0"
 git-tree-sha1 = "2eaa69a7cab70a52b9687c8bf950a5a93ec895ae"
 uuid = "076d061b-32b6-4027-95e0-9a2c6f6d7e74"
 version = "0.2.0"
-
-[[deps.HypergeometricFunctions]]
-deps = ["LinearAlgebra", "OpenLibm_jll", "SpecialFunctions"]
-git-tree-sha1 = "2bd56245074fab4015b9174f24ceba8293209053"
-uuid = "34004b35-14d8-5ef3-9330-4cdb6864b03a"
-version = "0.3.27"
 
 [[deps.IRTools]]
 deps = ["InteractiveUtils", "MacroTools"]
@@ -1382,12 +1287,6 @@ deps = ["Artifacts", "Libdl"]
 uuid = "efcefdf7-47ab-520b-bdef-62a2eaa19f15"
 version = "10.42.0+1"
 
-[[deps.PDMats]]
-deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
-git-tree-sha1 = "966b85253e959ea89c53a9abebbf2e964fbf593b"
-uuid = "90014a1f-27ba-587c-ab20-58faa44d9150"
-version = "0.11.32"
-
 [[deps.Pango_jll]]
 deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "FriBidi_jll", "Glib_jll", "HarfBuzz_jll", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "3b31172c032a1def20c98dae3f2cdc9d10e3b561"
@@ -1492,12 +1391,6 @@ git-tree-sha1 = "80d919dee55b9c50e8d9e2da5eeafff3fe58b539"
 uuid = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
 version = "0.1.4"
 
-[[deps.ProgressMeter]]
-deps = ["Distributed", "Printf"]
-git-tree-sha1 = "8f6bc219586aef8baf0ff9a5fe16ee9c70cb65e4"
-uuid = "92933f4c-e287-5a05-a399-4b506db050ca"
-version = "1.10.2"
-
 [[deps.PtrArrays]]
 git-tree-sha1 = "1d36ef11a9aaf1e8b74dacc6a731dd1de8fd493d"
 uuid = "43287f4e-b6f4-7ad1-bb20-aadabca52c3d"
@@ -1526,18 +1419,6 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Qt6Base_jll", "Qt6Declarative_jll"
 git-tree-sha1 = "729927532d48cf79f49070341e1d918a65aba6b0"
 uuid = "e99dba38-086e-5de3-a5b1-6e4c66e897c3"
 version = "6.7.1+1"
-
-[[deps.QuadGK]]
-deps = ["DataStructures", "LinearAlgebra"]
-git-tree-sha1 = "cda3b045cf9ef07a08ad46731f5a3165e56cf3da"
-uuid = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
-version = "2.11.1"
-
-    [deps.QuadGK.extensions]
-    QuadGKEnzymeExt = "Enzyme"
-
-    [deps.QuadGK.weakdeps]
-    Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 
 [[deps.REPL]]
 deps = ["InteractiveUtils", "Markdown", "Sockets", "StyledStrings", "Unicode"]
@@ -1584,12 +1465,6 @@ git-tree-sha1 = "45e428421666073eab6f2da5c9d310d99bb12f9b"
 uuid = "189a3867-3050-52da-a836-e630ba90ab69"
 version = "1.2.2"
 
-[[deps.Referenceables]]
-deps = ["Adapt"]
-git-tree-sha1 = "02d31ad62838181c1a3a5fd23a1ce5914a643601"
-uuid = "42d2dcc6-99eb-4e98-b66c-637b7d73030e"
-version = "0.1.3"
-
 [[deps.RelocatableFolders]]
 deps = ["SHA", "Scratch"]
 git-tree-sha1 = "ffdaf70d81cf6ff22c2b6e733c900c3321cab864"
@@ -1601,18 +1476,6 @@ deps = ["UUIDs"]
 git-tree-sha1 = "838a3a4188e2ded87a4f9f184b4b0d78a1e91cb7"
 uuid = "ae029012-a4dd-5104-9daa-d747884805df"
 version = "1.3.0"
-
-[[deps.Rmath]]
-deps = ["Random", "Rmath_jll"]
-git-tree-sha1 = "852bd0f55565a9e973fcfee83a84413270224dc4"
-uuid = "79098fc4-a85e-5d69-aa6a-4863f24498fa"
-version = "0.8.0"
-
-[[deps.Rmath_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "58cdd8fb2201a6267e1db87ff148dd6c1dbd8ad8"
-uuid = "f50d1b31-88e8-58de-be2c-1cc44531875f"
-version = "0.5.1+0"
 
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -1749,17 +1612,6 @@ git-tree-sha1 = "29321314c920c26684834965ec2ce0dacc9cf8e5"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 version = "0.34.4"
 
-[[deps.StatsFuns]]
-deps = ["HypergeometricFunctions", "IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
-git-tree-sha1 = "b423576adc27097764a90e163157bcfc9acf0f46"
-uuid = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
-version = "1.3.2"
-weakdeps = ["ChainRulesCore", "InverseFunctions"]
-
-    [deps.StatsFuns.extensions]
-    StatsFunsChainRulesCoreExt = "ChainRulesCore"
-    StatsFunsInverseFunctionsExt = "InverseFunctions"
-
 [[deps.StringManipulation]]
 deps = ["PrecompileTools"]
 git-tree-sha1 = "725421ae8e530ec29bcbdddbe91ff8053421d023"
@@ -1825,12 +1677,6 @@ version = "0.1.1"
 deps = ["InteractiveUtils", "Logging", "Random", "Serialization"]
 uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 version = "1.11.0"
-
-[[deps.ThreadsX]]
-deps = ["Accessors", "ArgCheck", "BangBang", "ConstructionBase", "InitialValues", "MicroCollections", "Referenceables", "SplittablesBase", "Transducers"]
-git-tree-sha1 = "70bd8244f4834d46c3d68bd09e7792d8f571ef04"
-uuid = "ac1d9e8a-700a-412c-b207-f0111f4b6c0d"
-version = "0.1.12"
 
 [[deps.TimerOutputs]]
 deps = ["ExprTools", "Printf"]
@@ -2252,18 +2098,16 @@ version = "1.4.1+2"
 # ╠═0a67a981-8dbc-435f-a5b0-0a50485ea676
 # ╟─ebe02d8f-b03a-4535-a695-7620e95ac598
 # ╠═b5610bfd-c1b1-438c-bbad-074e45bc1578
+# ╠═503f414d-ac75-47c9-af64-bb9f92dfea1c
 # ╟─9e313963-c0ff-447e-86d1-9d96d503d5f5
 # ╠═3746a4e2-62c3-4473-b7bc-eab0b07e42e5
 # ╟─5cc05899-400f-4baf-a983-2d85cdac14d8
 # ╠═5552f664-c1bb-4c83-89aa-dcea9a5fce12
 # ╟─2880942e-288a-4fd3-9bc6-b20be2b9593d
-# ╠═9d72129f-06ae-4b5f-9074-399094da26e5
 # ╠═65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
 # ╟─e873199b-575b-4f7d-90d2-32f60b847e7e
 # ╠═ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
 # ╟─d1c22034-ee3b-44e9-b9d9-a11797131867
 # ╠═6796e99f-73ab-4f02-94dd-c64eb4284180
-# ╟─b167a683-0a84-4196-bcb4-4a6913fc8435
-# ╠═535495c2-416d-40ec-a7c0-3242b7fdbe2a
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
