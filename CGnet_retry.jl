@@ -117,42 +117,146 @@ md"""Loss function."""
 
 # ╔═╡ 46a3af57-1b9b-4bcc-ba37-84964eb2154c
 begin
-	function loss_fn(xs, fs)
-	    preds = map(xs) do x
-	        U(x) = CGnet([x]) |> first
-	        -Zygote.gradient(U, x)[1]
+	function loss_fn(model, xs, fs)
+	    # Compute force predictions one by one
+	    force_preds = similar(fs)
+	    
+	    for i in 1:length(xs)
+	        x = xs[i]
+	        # Create a tensor for a single input
+	        x_single = reshape([x], 1, 1) |> gpu
+	        
+	        x_tracked = x |> Flux.Zygote.param
+	        
+	        energy_pred = model(reshape([x_tracked], 1, 1))[1]
+	        force = -Flux.Zygote.grad!(energy_pred, x_tracked)
+	        
+	        force_preds[i] = force
 	    end
-	    return mean((preds .- fs).^2)
+	    
+	    # Calculate MSE loss
+	    return Flux.mse(force_preds, fs)
+	end
+end
+
+# ╔═╡ 322dcf57-c561-428c-8366-f2a454bec730
+begin
+	function train_model(model, xs, fs, epochs=20)
+	    opt = Flux.Optimiser(Flux.Adam(0.001))
+	    losses = Float32[]
+	    
+	    @showprogress for epoch in 1:epochs
+	        # Standard Flux training pattern
+	        grad = Zygote.gradient(Flux.params(model)) do
+	            loss_fn(model, xs, fs)
+	        end
+	        
+	        # Update parameters
+	        Flux.update!(opt, Flux.params(model), grad)
+	        
+	        # Record loss
+	        current_loss = loss_fn(model, xs, fs)
+	        push!(losses, current_loss)
+	        
+	        if epoch % 5 == 0
+	            println("Epoch $epoch: Loss = $current_loss")
+	        end
+	    end
+	    
+	    return losses
+	end
+end
+
+# ╔═╡ 462e234e-5ab2-4bdd-b993-198bd5f39af5
+begin
+	function validate_model(model, mean_val, std_val)
+	    # Create test points 
+	    test_x = range(-6, 6, length=200)
+	    test_x_norm = Float32.((test_x .- mean_val) ./ std_val)
+	    
+	    # Compute true forces
+	    true_forces = [-Zygote.gradient(z -> V(x, 0.0), x)[1] for x in test_x]
+	    
+	    # Get model predictions
+	    model_cpu = cpu(model)  # Move model back to CPU for plotting
+	    pred_forces = map(test_x_norm) do x
+	        x_tensor = reshape([x], 1, 1) |> Array{Float32}
+	        gs = Zygote.gradient(model_cpu) do m
+	            m(x_tensor)[1]
+	        end
+	        -gs[1][1]
+	    end
+	    
+	    # Create plot
+	    p = plot(test_x, true_forces, label="True Force", lw=2, 
+	         title="Learned vs True Force Field", 
+	         xlabel="Position", ylabel="Force")
+	    plot!(test_x, pred_forces, label="CGnet", lw=2, ls=:dash)
+	    
+	    return p
 	end
 end
 
 # ╔═╡ 0dff8ee9-167b-4fc1-bb11-8e2dddcbcad8
 md"""Training setup."""
 
-# ╔═╡ efc81128-b8c5-4e20-b4d9-d8d4b3cf12c5
+# ╔═╡ 2be23db9-ec53-473b-952d-8acbb086e096
+
+
+# ╔═╡ 86b836d3-75bd-4418-8099-a506f25d841c
 begin
-	opt = Optimisers.Adam(0.01)
-	ps = Flux.trainable(CGnet)
-	state = Optimisers.setup(opt, ps)
+	# Ensure data is properly formatted
+	xs_gpu = x_vals_norm |> gpu
+	fs_gpu = fx_vals |> gpu
 	
-	num_epochs = 20  # can increase after validation
-	loss_history = []
+	# Train the model
+	loss_history = train_model(CGnet, xs_gpu, fs_gpu, 20)
 	
-	xs_gpu = gpu(x_vals_norm)
-	fs_gpu = gpu(fx_vals)
+	# Plot the losses
+	p_loss = plot(loss_history, label="Training Loss", 
+	         title="Loss vs Epoch", xlabel="Epoch", ylabel="MSE Loss")
 	
-	for epoch in 1:num_epochs
-	    loss, back = Zygote.withgradient(ps) do p
-	        Functors.fmap!(CGnet, p)  # Load current parameters into the model
-	        loss_fn(xs_gpu, fs_gpu)
-	    end
+	# Validate the model
+	p_forces = validate_model(CGnet, x_mean, x_std)
 	
-	    state, ps = Optimisers.update(state, ps, back)
-	    Functors.fmap!(CGnet, ps)  # Apply updated params back to model
-	
-	    push!(loss_history, loss)
-	end
+	# Display plots
+	plot(p_loss, p_forces, layout=(2,1), size=(800, 600))
 end
+
+# ╔═╡ efc81128-b8c5-4e20-b4d9-d8d4b3cf12c5
+# begin
+# 	opt = Optimisers.Adam(0.01)
+	
+# 	model_params = Flux.trainable(CGnet)
+# 	state = Optimisers.setup(opt, model_params)
+	
+# 	num_epochs = 20
+# 	loss_history = Float32[]
+	
+# 	# Convert data to GPU
+# 	xs_gpu = reshape(x_vals_norm, :) |> gpu
+# 	fs_gpu = reshape(fx_vals, :) |> gpu
+	
+# 	@showprogress for epoch in 1:num_epochs
+# 	    # Compute loss and gradients with appropriate signature
+# 	    loss, gs = Zygote.withgradient(p -> begin
+# 	        # Apply current parameters to model (needed for Functors approach)
+# 	        CGnet = Functors.fmap(p -> p, CGnet, p)
+# 	        loss_fn(CGnet, xs_gpu, fs_gpu)
+# 	    end, model_params)
+	    
+# 	    state, ps = Optimisers.update(state, model_params, gs)
+	    
+# 	    CGnet = Functors.fmap(p -> p, CGnet, p)
+	    
+# 	    # Record loss
+# 	    push!(loss_history, loss)
+	    
+# 	    if epoch % 5 == 0
+# 	        println("Epoch $epoch: Loss = $loss")
+# 	    end
+# 	end
+# end
 
 # ╔═╡ 40b5e6e9-9519-424f-b2ee-d5125bbf47c6
 
@@ -2185,7 +2289,11 @@ version = "1.4.1+2"
 # ╠═638ace25-9260-4d34-94c5-fc356db370f7
 # ╟─63cbfbcf-ba2d-4187-ba6f-f31feb062123
 # ╠═46a3af57-1b9b-4bcc-ba37-84964eb2154c
+# ╠═322dcf57-c561-428c-8366-f2a454bec730
+# ╠═462e234e-5ab2-4bdd-b993-198bd5f39af5
 # ╟─0dff8ee9-167b-4fc1-bb11-8e2dddcbcad8
+# ╠═2be23db9-ec53-473b-952d-8acbb086e096
+# ╠═86b836d3-75bd-4418-8099-a506f25d841c
 # ╠═efc81128-b8c5-4e20-b4d9-d8d4b3cf12c5
 # ╠═40b5e6e9-9519-424f-b2ee-d5125bbf47c6
 # ╟─00000000-0000-0000-0000-000000000001
