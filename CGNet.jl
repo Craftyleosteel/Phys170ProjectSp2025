@@ -35,7 +35,7 @@ md"""
 """
 
 # ╔═╡ 7a63dbc2-c063-4866-a961-58ea3d594338
-# Harmonic potential: V(x, y) = ½x² + ½y²
+# Harmonic potential: V(x, y) = ½x2 + ½y2
 function V(x, y)
     return 0.5 * x^2 + 0.5 * y^2
 end
@@ -51,7 +51,7 @@ begin
 n_samples = 5000
 Random.seed!(123)
 
-traj = [rand(Float32)*4f0 .- 2f0 for _ in 1:n_samples, __ in 1:10]  # (n_samples, 2)
+traj = [rand(Float32)*100f0 .- 10f0 for _ in 1:n_samples, __ in 1:10]  # (n_samples, 2)
 traj = reduce(vcat, traj)'
 end
 
@@ -65,7 +65,7 @@ begin
 # Compute x-values and true forces from harmonic potential
 function compute_instantaneous_forces(traj)
     xs = traj[:, 1]
-    fx = -xs  # F = -∂V/∂x = -x
+    fx = -xs # F = -∂V/∂x = -x
     return xs, fx
 end
 
@@ -94,6 +94,7 @@ begin
 CGnet = Chain(
     Dense(1, 64, relu),
     Dense(64, 64, relu),
+	Dense(64, 64, relu),
     Dense(64, 1)
 ) |> gpu  # move to GPU
 end
@@ -117,7 +118,7 @@ md"""
 
 # ╔═╡ aea30b9a-824b-40a4-b5ed-7c2414aeceae
 # Training function - we make this a separate cell to avoid variable scope issues
-function train_cgnet(model, x_data, f_data; num_epochs=30, batchsize=256, learning_rate=0.01)
+function train_cgnet(model, x_data, f_data; num_epochs=200, batchsize=256, learning_rate=0.001)
     # Initialize loss history
     train_loss_history = Float64[]
     
@@ -206,7 +207,7 @@ md"""
 
 # ╔═╡ 6796e99f-73ab-4f02-94dd-c64eb4284180
 begin
-x_test = collect(-2f0:0.01f0:2f0)
+x_test = collect(-30f0:0.01f0:30f0)
 x_test_gpu = reshape(gpu(x_test), 1, :)
 
 f_pred = CGnet(x_test_gpu)[1, :] |> collect
