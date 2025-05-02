@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.20.4
+# v0.20.6
 
 using Markdown
 using InteractiveUtils
@@ -51,7 +51,7 @@ begin
 n_samples = 5000
 Random.seed!(123)
 
-traj = [rand(Float32)*4f0 .- 2f0 for _ in 1:n_samples, __ in 1:2]  # (n_samples, 2)
+traj = [rand(Float32)*4f0 .- 2f0 for _ in 1:n_samples, __ in 1:10]  # (n_samples, 2)
 traj = reduce(vcat, traj)'
 end
 
@@ -72,6 +72,11 @@ end
 x_vals, fx_vals = compute_instantaneous_forces(traj)
 end
 
+# ╔═╡ c37580be-650b-4a9d-940f-73c3e663c7d4
+begin
+	CUDA.has_cuda()
+end
+
 # ╔═╡ 503f414d-ac75-47c9-af64-bb9f92dfea1c
 begin
 # Convert to Float32 and shape for Flux (features, batch_size)
@@ -87,9 +92,9 @@ md"""
 # ╔═╡ 3746a4e2-62c3-4473-b7bc-eab0b07e42e5
 begin
 CGnet = Chain(
-    Dense(1, 32, relu),
-    Dense(32, 32, relu),
-    Dense(32, 1)
+    Dense(1, 64, relu),
+    Dense(64, 64, relu),
+    Dense(64, 1)
 ) |> gpu  # move to GPU
 end
 
@@ -99,8 +104,8 @@ md"""
 """
 
 # ╔═╡ 5552f664-c1bb-4c83-89aa-dcea9a5fce12
-function batch_loss_fast_gpu(xb, fb)
-    f_pred = CGnet(xb)[1, :]  # (1, batch_size) ⇒ slice to (batch_size,)
+function batch_loss_fast_gpu(xb, fb, model)
+    f_pred = model(xb)[1, :]  # (1, batch_size) ⇒ slice to (batch_size,)
     return mean((f_pred .- fb).^2)
 end
 
@@ -110,40 +115,81 @@ md"""
 ## Train the NN
 """
 
-# ╔═╡ 65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
-begin
-	opt = Optimisers.Adam(0.01)
-	
-	let
-	    state = Optimisers.setup(opt, Flux.trainable(CGnet))
-	
-	    num_epochs = 20
-	    batchsize = 256
-	    loss_history = Float64[]
-	
-	    for epoch in 1:num_epochs
-	        epoch_loss = 0.0
-	        inds = shuffle(1:size(x_train_gpu, 2))
-	
-	        for i in 1:batchsize:length(inds)
-    			idx = inds[i:min(i + batchsize - 1, end)]
-    			xb = x_train_gpu[:, idx]
-    			fb = f_train_gpu[idx]
-
-    			grads = let xb=xb, fb=fb, CGnet=CGnet
-       	 		Flux.gradient(() -> batch_loss_fast_gpu(xb, fb), Flux.trainable(CGnet))
+# ╔═╡ aea30b9a-824b-40a4-b5ed-7c2414aeceae
+# Training function - we make this a separate cell to avoid variable scope issues
+function train_cgnet(model, x_data, f_data; num_epochs=30, batchsize=256, learning_rate=0.01)
+    # Initialize loss history
+    train_loss_history = Float64[]
+    
+    # Setup optimizer
+    opt = Optimisers.Adam(learning_rate)
+    state = Optimisers.setup(opt, model)
+    
+    for epoch in 1:num_epochs
+        epoch_loss = 0.0
+        inds = shuffle(1:size(x_data, 2))
+        
+        for i in 1:batchsize:length(inds)
+            idx = inds[i:min(i + batchsize - 1, end)]
+            xb = x_data[:, idx]
+            fb = f_data[idx]
+            
+            # Calculate gradients
+            loss, grads = Flux.withgradient(model) do m
+                batch_loss_fast_gpu(xb, fb, m)
+            end
+            
+            # Update parameters
+            state, model = Optimisers.update!(state, model, grads[1])
+            epoch_loss += loss
+        end
+        
+        push!(train_loss_history, epoch_loss)
+        println("Epoch $epoch - Loss = $(round(epoch_loss, digits=4))")
     end
-
-    state = Optimisers.update!(state, Flux.trainable(CGnet), grads)
-    epoch_loss += batch_loss_fast_gpu(xb, fb)
+    
+    return model, train_loss_history
 end
+
+# ╔═╡ 12714017-bfdb-4ce5-94da-12a1d53125e7
+begin
+	trained_model, loss_history = train_cgnet(CGnet, x_train_gpu, f_train_gpu)
+end
+
+# ╔═╡ 65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
+# begin
+# 	opt = Optimisers.Adam(0.01)
+	
+# 	let
+# 	    state = Optimisers.setup(opt, Flux.trainable(CGnet))
+	
+# 	    num_epochs = 20
+# 	    batchsize = 256
+# 	    loss_history = Float64[]
+	
+# 	    for epoch in 1:num_epochs
+# 	        epoch_loss = 0.0
+# 	        inds = shuffle(1:size(x_train_gpu, 2))
+	
+# 	        for i in 1:batchsize:length(inds)
+#     			idx = inds[i:min(i + batchsize - 1, end)]
+#     			xb = x_train_gpu[:, idx]
+#     			fb = f_train_gpu[idx]
+
+#     			grads = let xb=xb, fb=fb, CGnet=CGnet
+#        	 		Flux.gradient(() -> batch_loss_fast_gpu(xb, fb), Flux.trainable(CGnet))
+#     end
+
+#     state = Optimisers.update!(state, Flux.trainable(CGnet), grads)
+#     epoch_loss += batch_loss_fast_gpu(xb, fb)
+# end
 
 	
-	        push!(loss_history, epoch_loss)
-	        println("Epoch $epoch - Loss = $(round(epoch_loss, digits=4))")
-	    end
-	end
-end
+# 	        push!(loss_history, epoch_loss)
+# 	        println("Epoch $epoch - Loss = $(round(epoch_loss, digits=4))")
+# 	    end
+# 	end
+# end
 
 # ╔═╡ e873199b-575b-4f7d-90d2-32f60b847e7e
 md"""
@@ -186,16 +232,15 @@ CUDA = "~5.6.1"
 Flux = "~0.16.2"
 Optimisers = "~0.4.4"
 Plots = "~1.40.9"
-Statistics = "~1.11.1"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.11.3"
+julia_version = "1.11.4"
 manifest_format = "2.0"
-project_hash = "08d51271756c10ab66db313f85187502d091bd15"
+project_hash = "4fbff81e316a78aeabde5d01de8d9cb0c193caf4"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -1240,7 +1285,7 @@ version = "0.3.27+1"
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
-version = "0.8.1+2"
+version = "0.8.1+4"
 
 [[deps.OpenSSL]]
 deps = ["BitFlags", "Dates", "MozillaCACerts_jll", "OpenSSL_jll", "Sockets"]
@@ -2098,12 +2143,15 @@ version = "1.4.1+2"
 # ╠═0a67a981-8dbc-435f-a5b0-0a50485ea676
 # ╟─ebe02d8f-b03a-4535-a695-7620e95ac598
 # ╠═b5610bfd-c1b1-438c-bbad-074e45bc1578
+# ╠═c37580be-650b-4a9d-940f-73c3e663c7d4
 # ╠═503f414d-ac75-47c9-af64-bb9f92dfea1c
 # ╟─9e313963-c0ff-447e-86d1-9d96d503d5f5
 # ╠═3746a4e2-62c3-4473-b7bc-eab0b07e42e5
 # ╟─5cc05899-400f-4baf-a983-2d85cdac14d8
 # ╠═5552f664-c1bb-4c83-89aa-dcea9a5fce12
 # ╟─2880942e-288a-4fd3-9bc6-b20be2b9593d
+# ╠═aea30b9a-824b-40a4-b5ed-7c2414aeceae
+# ╠═12714017-bfdb-4ce5-94da-12a1d53125e7
 # ╠═65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
 # ╟─e873199b-575b-4f7d-90d2-32f60b847e7e
 # ╠═ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
