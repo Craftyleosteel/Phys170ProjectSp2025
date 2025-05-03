@@ -12,6 +12,7 @@ begin
 	using Random
 	using Statistics
 	using Plots
+	using Zygote
 end
 
 # ╔═╡ 1f58cc07-0388-4d62-a73d-5b352227111a
@@ -65,7 +66,7 @@ begin
     # Compute x-values and true forces from a nonlinear potential
     function compute_instantaneous_forces(traj)
         xs = traj[:, 1]
-        fx = .-xs.^3  # F(x) = -x^3
+        fx = .-(xs .^ 7) .+ xs .^ 2
         return xs, fx
     end
 
@@ -97,10 +98,10 @@ md"""
 # ╔═╡ 3746a4e2-62c3-4473-b7bc-eab0b07e42e5
 begin
 CGnet = Chain(
-    Dense(1, 64, relu),
-    Dense(64, 64, relu),
-	Dense(64, 64, relu),
-    Dense(64, 1)
+    Dense(1, 128, relu),
+    Dense(128, 256, relu),
+	Dense(256, 128, relu),
+    Dense(128, 1)
 ) |> gpu  # move to GPU
 end
 
@@ -122,7 +123,7 @@ md"""
 """
 
 # ╔═╡ aea30b9a-824b-40a4-b5ed-7c2414aeceae
-function train_cgnet(model, x_data, f_data; num_epochs=500, batchsize=256, learning_rate=0.0005)
+function train_cgnet(model, x_data, f_data; num_epochs=750, batchsize=256, learning_rate=0.0005)
     train_loss_history = Float64[]
     
     opt = Optimisers.Adam(learning_rate)
@@ -163,41 +164,6 @@ begin
 	trained_model, loss_history = train_cgnet(CGnet, x_train_gpu, f_train_gpu)
 end
 
-# ╔═╡ 65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
-# begin
-# 	opt = Optimisers.Adam(0.01)
-	
-# 	let
-# 	    state = Optimisers.setup(opt, Flux.trainable(CGnet))
-	
-# 	    num_epochs = 20
-# 	    batchsize = 256
-# 	    loss_history = Float64[]
-	
-# 	    for epoch in 1:num_epochs
-# 	        epoch_loss = 0.0
-# 	        inds = shuffle(1:size(x_train_gpu, 2))
-	
-# 	        for i in 1:batchsize:length(inds)
-#     			idx = inds[i:min(i + batchsize - 1, end)]
-#     			xb = x_train_gpu[:, idx]
-#     			fb = f_train_gpu[idx]
-
-#     			grads = let xb=xb, fb=fb, CGnet=CGnet
-#        	 		Flux.gradient(() -> batch_loss_fast_gpu(xb, fb), Flux.trainable(CGnet))
-#     end
-
-#     state = Optimisers.update!(state, Flux.trainable(CGnet), grads)
-#     epoch_loss += batch_loss_fast_gpu(xb, fb)
-# end
-
-	
-# 	        push!(loss_history, epoch_loss)
-# 	        println("Epoch $epoch - Loss = $(round(epoch_loss, digits=4))")
-# 	    end
-# 	end
-# end
-
 # ╔═╡ e873199b-575b-4f7d-90d2-32f60b847e7e
 md"""
 ## Check Convergence Of Training
@@ -217,9 +183,9 @@ begin
     x_test_gpu = reshape(gpu(x_test), 1, :)
 
     f_pred = CGnet(x_test_gpu)[1, :] |> collect
-    f_true = .-x_test.^3  # Correct: force from V(x) = (1/3)x^3
+    f_true = .-(x_test .^ 7) .+ x_test .^ 3
 
-    plot(x_test, f_true, label="True F = -x3", lw=2)
+    plot(x_test, f_true, label="True F = -x⁷ + x²", lw=2)
     plot!(x_test, f_pred, label="CGnet Prediction", lw=2, ls=:dash)
 end
 
@@ -233,6 +199,7 @@ Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
+Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
 CUDA = "~5.6.1"
@@ -240,6 +207,7 @@ Flux = "~0.16.2"
 Optimisers = "~0.4.4"
 Plots = "~1.40.9"
 StatsPlots = "~0.15.7"
+Zygote = "~0.7.3"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
@@ -248,7 +216,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.4"
 manifest_format = "2.0"
-project_hash = "df05e0a7654eb05d80c2b548dd0df696d92c28e4"
+project_hash = "d1cd832ec6f678c0573fd33bc7d4e45e45188489"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -2366,7 +2334,6 @@ version = "1.4.1+2"
 # ╟─2880942e-288a-4fd3-9bc6-b20be2b9593d
 # ╠═aea30b9a-824b-40a4-b5ed-7c2414aeceae
 # ╠═12714017-bfdb-4ce5-94da-12a1d53125e7
-# ╠═65a0e2c6-4e1c-4ed4-bec6-2c428d9b95df
 # ╟─e873199b-575b-4f7d-90d2-32f60b847e7e
 # ╠═ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
 # ╟─d1c22034-ee3b-44e9-b9d9-a11797131867
