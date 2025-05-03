@@ -13,37 +13,48 @@ begin
 	using Statistics
 	using Plots
 	using Zygote
+	using LinearAlgebra
 end
 
 # ╔═╡ 1f58cc07-0388-4d62-a73d-5b352227111a
 md"""
-# CGNet In Julia
+# CGnet Implementation in Julia Programming Language.
 """
 
 # ╔═╡ d0fd2080-1985-11f0-00c2-bbfce2ad649b
 md"""
-Created By Ananya Venkatachalam and Paco Navarro
+Created By Ananya Venkatachalam and Paco Navarro for PHYS170X at Harvey Mudd College.
 """
 
 # ╔═╡ 48bd4aa5-a6a5-4319-a6cb-821eebacc830
 md"""
-## First import relevant packages
+## Import relevant packages and check CUDA integration.
 """
+
+# ╔═╡ c37580be-650b-4a9d-940f-73c3e663c7d4
+begin
+	CUDA.has_cuda()
+end
 
 # ╔═╡ 0fc0db9d-f5f6-439d-bfee-475e20d8a3ee
 md"""
-# Define a toy potential for a proof of concept
+## Potential from the CGnet paper.
 """
 
 # ╔═╡ 7a63dbc2-c063-4866-a961-58ea3d594338
-# Harmonic potential: V(x, y) = ½x2 + ½y2
 function V(x, y)
-    return 0.33 * x^3 + 0.33 * y^3
+	xterm = (x - 4)*(x + 2)*(x - 2)*(x + 3)
+	ripples = (1/25) * sin(3 * (x + 5) * (x + 6))
+	return (1/50) * xterm + 0.5 * y^2 + ripples
 end
 
 # ╔═╡ 6ed893e2-8186-4870-a22f-0da60934ff13
 md"""
-## Define The Simulation Dynamics
+## Define the simulation dynamics.
+"""
+
+# ╔═╡ 3c7907e4-7ee5-407f-a3f9-a16cfa246a6a
+md"""The values in `traj` are uniformly sampled from a square in 2D such that each point (x, y) in [-5.0, 5.0) * [-5.0, 5.0). So `traj` contains 5,000 random coordinates scattered throughout a square centered at the origin with side length 10.
 """
 
 # ╔═╡ 0a67a981-8dbc-435f-a5b0-0a50485ea676
@@ -56,32 +67,39 @@ begin
 	traj = reduce(hcat, traj)'  # shape: (5000, 2)
 end
 
+# ╔═╡ ee1d71df-31d6-4fd7-80e1-c6834f3d2b3e
+md"""Checking the distribution of trajectory values.
+"""
+
 # ╔═╡ ebe02d8f-b03a-4535-a695-7620e95ac598
 md"""
-## Define How We are Computing the Force fields
+## Define how force fields are computed.
 """
 
 # ╔═╡ b5610bfd-c1b1-438c-bbad-074e45bc1578
 begin
-    # Compute x-values and true forces from a nonlinear potential
-    function compute_instantaneous_forces(traj)
-        xs = traj[:, 1]
-        fx = .-(xs .^ 7) .+ xs .^ 2
-        return xs, fx
-    end
+	function compute_instantaneous_forces(traj)
+	    n = size(traj, 1)
+	    x_vals = traj[:, 1]
+	    ys = traj[:, 2]
+	
+	    fx_vals = Float32[]
+	    for i in 1:n
+	        x, y = x_vals[i], ys[i]
+	        ∇V = Zygote.gradient((u, v) -> V(u, v), x, y)
+	        push!(fx_vals, -∇V[1])  # negative gradient = force
+	    end
+	
+	    return x_vals, fx_vals
+	end
 
-    x_vals, fx_vals = compute_instantaneous_forces(traj)
+	x_vals, fx_vals = compute_instantaneous_forces(traj)
 end
 
 # ╔═╡ f6ea59a9-317d-4aac-a14f-9634a5eab3e5
 begin
 	using StatsPlots
 	histogram(x_vals, bins=50, title="Distribution of x_vals", xlabel="x", ylabel="Frequency")
-end
-
-# ╔═╡ c37580be-650b-4a9d-940f-73c3e663c7d4
-begin
-	CUDA.has_cuda()
 end
 
 # ╔═╡ 503f414d-ac75-47c9-af64-bb9f92dfea1c
@@ -92,7 +110,7 @@ end
 
 # ╔═╡ 9e313963-c0ff-447e-86d1-9d96d503d5f5
 md"""
-## Define the Neural Network
+## Define the neural network.
 """
 
 # ╔═╡ 3746a4e2-62c3-4473-b7bc-eab0b07e42e5
@@ -107,7 +125,7 @@ end
 
 # ╔═╡ 5cc05899-400f-4baf-a983-2d85cdac14d8
 md"""
-## Define The Loss Function
+## Define the loss function.
 """
 
 # ╔═╡ 5552f664-c1bb-4c83-89aa-dcea9a5fce12
@@ -119,11 +137,11 @@ end
 
 # ╔═╡ 2880942e-288a-4fd3-9bc6-b20be2b9593d
 md"""
-## Train the NN
+## Train the neural network.
 """
 
 # ╔═╡ aea30b9a-824b-40a4-b5ed-7c2414aeceae
-function train_cgnet(model, x_data, f_data; num_epochs=750, batchsize=256, learning_rate=0.0005)
+function train_cgnet(model, x_data, f_data; num_epochs=1000, batchsize=256, learning_rate=0.0005)
     train_loss_history = Float64[]
     
     opt = Optimisers.Adam(learning_rate)
@@ -166,34 +184,114 @@ end
 
 # ╔═╡ e873199b-575b-4f7d-90d2-32f60b847e7e
 md"""
-## Check Convergence Of Training
+## Check convergence of training.
 """
 
 # ╔═╡ ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
-plot(loss_history, xlabel="Epoch", ylabel="Loss", title="Training Loss (Force Prediction)", lw=2)
+plot(loss_history, label="Training Loss (MSE on Forces)", xlabel="Epoch", ylabel="Loss", lw=2)
+
 
 # ╔═╡ d1c22034-ee3b-44e9-b9d9-a11797131867
 md"""
-## Visualize The Forces: True vs Learned
+## Visualize the forces: true vs. learned.
 """
 
 # ╔═╡ 6796e99f-73ab-4f02-94dd-c64eb4284180
 begin
-    x_test = collect(-2f0:0.01f0:2f0)
+    x_test = collect(-5f0:0.01f0:5f0)
     x_test_gpu = reshape(gpu(x_test), 1, :)
 
     f_pred = CGnet(x_test_gpu)[1, :] |> collect
-    f_true = .-(x_test .^ 7) .+ x_test .^ 3
 
-    plot(x_test, f_true, label="True F = -x⁷ + x²", lw=2)
+    # Recompute true forces from potential
+    f_true = [-Zygote.gradient((x)->V(x, 0.0), x)[1] for x in x_test]
+
+    plot(x_test, f_true, label="True F = -∇V", lw=2)
     plot!(x_test, f_pred, label="CGnet Prediction", lw=2, ls=:dash)
 end
+
+# ╔═╡ 8c85903e-2621-417d-b988-9d35ab082718
+md"""
+## Check the potential of mean force (PMF).
+"""
+
+# ╔═╡ 3b8a91c6-0f0a-4f3f-9893-7b5635a8d42f
+begin
+    # Define x range
+    xs_plot = collect(-5f0:0.01f0:5f0)
+    dx = xs_plot[2] - xs_plot[1]
+
+    # Exact PMF
+    U_exact(x) = -log(sum(exp.(-[V(x, y) for y in -4:0.1:4])) + 1e-10)
+    U_exact_vals = [U_exact(x) for x in xs_plot]
+    U_exact_vals .-= minimum(U_exact_vals)
+
+    # CGnet PMF via force integration
+    xs_gpu = reshape(gpu(Float32.(xs_plot)), 1, :)
+    f_pred_PMF = CGnet(xs_gpu)[1, :] |> collect
+    U_net_vals = -cumsum(f_pred_PMF) .* dx
+    U_net_vals .-= minimum(U_net_vals)
+
+    # Plot PMFs
+    plot(xs_plot, U_exact_vals, label="Exact PMF", lw=2)
+    plot!(xs_plot, U_net_vals, label="CGnet PMF", lw=2, ls=:dash)
+    xlabel!("x")
+    ylabel!("Free Energy")
+    # title!("Potential of Mean Force (PMF)")
+end
+
+
+# ╔═╡ 49ccfcde-2687-4b12-9f7c-b01bbbe42a17
+md"""
+## Master check/generation of figure from paper.
+"""
+
+# ╔═╡ 815ca1f1-0d70-4d65-8139-b23429b6bd1a
+begin
+    # Instantaneous force samples
+    x_vals_local, fx_vals_local = compute_instantaneous_forces(traj)
+
+    xs_plot_new = collect(-5f0:0.01f0:5f0)
+    bandwidth = 0.05
+
+    # Local average: Mean force from data
+    mean_force = Float32[]
+    for x in xs_plot_new
+        idxs = findall(abs.(x_vals_local .- x) .< bandwidth)
+        if !isempty(idxs)
+            push!(mean_force, mean(fx_vals_local[idxs]))
+        else
+            push!(mean_force, NaN)
+        end
+    end
+
+    # Remove NaNs
+    valid = .!isnan.(mean_force)
+    xs_valid = xs_plot_new[valid]
+    mean_force_valid = mean_force[valid]
+
+    # Predicted force from CGnet
+    xs_gpu_new = reshape(gpu(Float32.(xs_valid)), 1, :)
+    f_pred_new = CGnet(xs_gpu_new)[1, :] |> collect
+
+    # Plot
+    plot(xs_valid, mean_force_valid, label="Mean Force (Exact)", lw=2)
+    plot!(xs_valid, f_pred_new, label="CGnet Force", lw=2, ls=:dash)
+    scatter!(x_vals_local[1:1000], fx_vals_local[1:1000],
+             label="Instantaneous Forces", alpha=0.3, ms=2)
+
+    xlabel!("x")
+    ylabel!("Force")
+    # title!("Force Matching: CGnet vs. Ground Truth")
+end
+
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Optimisers = "3bd65402-5787-11e9-1adc-39752487f4e2"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
@@ -216,7 +314,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.4"
 manifest_format = "2.0"
-project_hash = "d1cd832ec6f678c0573fd33bc7d4e45e45188489"
+project_hash = "14b4471fb077e6c7d85730b4baed0e1d467cd88f"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -2318,14 +2416,16 @@ version = "1.4.1+2"
 # ╟─d0fd2080-1985-11f0-00c2-bbfce2ad649b
 # ╟─48bd4aa5-a6a5-4319-a6cb-821eebacc830
 # ╠═d0c11460-6e24-4960-9e3c-c67c572272b4
+# ╠═c37580be-650b-4a9d-940f-73c3e663c7d4
 # ╟─0fc0db9d-f5f6-439d-bfee-475e20d8a3ee
 # ╠═7a63dbc2-c063-4866-a961-58ea3d594338
 # ╟─6ed893e2-8186-4870-a22f-0da60934ff13
+# ╟─3c7907e4-7ee5-407f-a3f9-a16cfa246a6a
 # ╠═0a67a981-8dbc-435f-a5b0-0a50485ea676
+# ╟─ee1d71df-31d6-4fd7-80e1-c6834f3d2b3e
 # ╠═f6ea59a9-317d-4aac-a14f-9634a5eab3e5
 # ╟─ebe02d8f-b03a-4535-a695-7620e95ac598
 # ╠═b5610bfd-c1b1-438c-bbad-074e45bc1578
-# ╠═c37580be-650b-4a9d-940f-73c3e663c7d4
 # ╠═503f414d-ac75-47c9-af64-bb9f92dfea1c
 # ╟─9e313963-c0ff-447e-86d1-9d96d503d5f5
 # ╠═3746a4e2-62c3-4473-b7bc-eab0b07e42e5
@@ -2338,5 +2438,9 @@ version = "1.4.1+2"
 # ╠═ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
 # ╟─d1c22034-ee3b-44e9-b9d9-a11797131867
 # ╠═6796e99f-73ab-4f02-94dd-c64eb4284180
+# ╟─8c85903e-2621-417d-b988-9d35ab082718
+# ╠═3b8a91c6-0f0a-4f3f-9893-7b5635a8d42f
+# ╟─49ccfcde-2687-4b12-9f7c-b01bbbe42a17
+# ╠═815ca1f1-0d70-4d65-8139-b23429b6bd1a
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
