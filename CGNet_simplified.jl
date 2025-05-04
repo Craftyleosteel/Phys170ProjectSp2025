@@ -141,8 +141,12 @@ md"""
 """
 
 # ╔═╡ aea30b9a-824b-40a4-b5ed-7c2414aeceae
-function train_cgnet(model, x_data, f_data; num_epochs=1000, batchsize=256, learning_rate=0.0005)
+function train_cgnet(model, x_data, f_data; 
+    x_val=nothing, f_val=nothing, 
+    num_epochs=1000, batchsize=256, learning_rate=0.0005)
+
     train_loss_history = Float64[]
+	val_loss_history = Float64[]
     
     opt = Optimisers.Adam(learning_rate)
     state = Optimisers.setup(opt, model)
@@ -170,16 +174,39 @@ function train_cgnet(model, x_data, f_data; num_epochs=1000, batchsize=256, lear
         end
         
         push!(train_loss_history, epoch_loss)
-        println("Epoch $epoch - Loss = $(round(epoch_loss, digits=4))")
+        # Compute validation loss
+		if x_val !== nothing && f_val !== nothing
+		    val_loss = batch_loss_fast_gpu(x_val, f_val, model)
+		else
+		    val_loss = NaN
+		end
+		push!(val_loss_history, val_loss)
+
+        println("Epoch $epoch | Train Loss: $(round(epoch_loss, digits=4)) | Val Loss: $(round(val_loss, digits=4))")
     end
-    
-    return model, train_loss_history
+
+    return model, train_loss_history, val_loss_history
 end
 
 
+# ╔═╡ 6b7a987e-885d-479c-bb3e-2cc6022bfe77
+begin
+	# Split data into train and validation
+	function train_val_split(x, y, frac_train=0.8)
+	    n = size(x, 2)
+	    n_train = round(Int, frac_train * n)
+	    idx = shuffle(1:n)
+	    train_idx = idx[1:n_train]
+	    val_idx = idx[n_train+1:end]
+	    return x[:, train_idx], y[train_idx], x[:, val_idx], y[val_idx]
+	end
+	
+	x_train, f_train, x_val, f_val = train_val_split(x_train_gpu, f_train_gpu, 0.8)
+end
+
 # ╔═╡ 12714017-bfdb-4ce5-94da-12a1d53125e7
 begin
-	trained_model, loss_history = train_cgnet(CGnet, x_train_gpu, f_train_gpu)
+	trained_model, train_losses, val_losses = train_cgnet(CGnet, x_train, f_train; x_val=x_val, f_val=f_val)
 end
 
 # ╔═╡ e873199b-575b-4f7d-90d2-32f60b847e7e
@@ -188,8 +215,37 @@ md"""
 """
 
 # ╔═╡ ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
-plot(loss_history, label="Training Loss (MSE on Forces)", xlabel="Epoch", ylabel="Loss", lw=2)
+plot(train_losses, label="Training Loss (MSE on Forces)", xlabel="Epoch", ylabel="Loss", lw=2)
 
+
+# ╔═╡ 982e7d59-48a7-4ac7-bfc1-dab6f0d55bf3
+begin
+	plot(1:length(train_losses), train_losses, label="Training Loss")
+	plot!(1:length(val_losses), val_losses, label="Validation Loss", lw=2, ls=:dash)
+	xlabel!("Epoch")
+	ylabel!("MSE Loss")
+	# title!("Training vs Validation Loss")
+end
+
+# ╔═╡ 125e2ec1-dc30-4a66-a0df-139b33fb7151
+begin
+y_pred_train = trained_model(x_train)
+y_pred_val = trained_model(x_val)
+
+
+scatter(f_train, vec(y_pred_train), label="Train")
+scatter!(f_val, vec(y_pred_val), label="Validation")
+plot!(xlabel="True f", ylabel="Predicted f")
+
+end
+
+# ╔═╡ 6e5aaf7b-e0d3-444d-a26d-c5735e364ed2
+begin
+scatter(f_train, f_train .- vec(y_pred_train), label="Train Residuals")
+scatter!(f_val, f_val .- vec(y_pred_val), label="Val Residuals")
+plot!(xlabel="True f", ylabel="Residual (True - Pred)")
+
+end
 
 # ╔═╡ d1c22034-ee3b-44e9-b9d9-a11797131867
 md"""
@@ -2433,10 +2489,14 @@ version = "1.4.1+2"
 # ╠═5552f664-c1bb-4c83-89aa-dcea9a5fce12
 # ╟─2880942e-288a-4fd3-9bc6-b20be2b9593d
 # ╠═aea30b9a-824b-40a4-b5ed-7c2414aeceae
+# ╠═6b7a987e-885d-479c-bb3e-2cc6022bfe77
 # ╠═12714017-bfdb-4ce5-94da-12a1d53125e7
 # ╟─e873199b-575b-4f7d-90d2-32f60b847e7e
 # ╠═ba8fce4e-3df8-4036-9ceb-d6021e01b8d8
-# ╟─d1c22034-ee3b-44e9-b9d9-a11797131867
+# ╠═982e7d59-48a7-4ac7-bfc1-dab6f0d55bf3
+# ╠═125e2ec1-dc30-4a66-a0df-139b33fb7151
+# ╠═6e5aaf7b-e0d3-444d-a26d-c5735e364ed2
+# ╠═d1c22034-ee3b-44e9-b9d9-a11797131867
 # ╠═6796e99f-73ab-4f02-94dd-c64eb4284180
 # ╟─8c85903e-2621-417d-b988-9d35ab082718
 # ╠═3b8a91c6-0f0a-4f3f-9893-7b5635a8d42f
